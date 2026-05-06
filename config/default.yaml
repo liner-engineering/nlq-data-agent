@@ -1,0 +1,29 @@
+# NLQ Data Agent 기본 설정
+
+environment:
+  project_name: nlq-data-agent
+  version: 0.1.0
+  gcp_project: liner-219011
+
+bigquery:
+  project: liner-219011
+  location: US
+  timeout_seconds: 300
+  max_results: 10000
+
+analysis:
+  min_sample_size: 10
+  recommended_sample_size: 100
+  statistical_significance_threshold: 0.05
+
+llm:
+  provider: litellm
+  model: gemini-2.5-flash-lite
+  api_key_env: LITELLM_API_KEY
+  temperature: 0.2
+  max_tokens: 2000
+
+output:
+  save_results: true
+  result_dir: ./results/
+  format: json
