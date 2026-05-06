@@ -1,123 +1,180 @@
 """
-NLQAgent - 자연어 데이터 분석 에이전트
+NLQ Agent - 자연어 데이터 분석 에이전트
 
-메인 에이전트 클래스 (P0: 기본 틀)
-P1에서 LLM 연결 및 실행 기능 추가
+사용자의 자연어 쿼리를 해석하여 BigQuery SQL을 생성하고 실행합니다.
+전체 분석 파이프라인을 조율합니다.
 """
 
-import asyncio
-from typing import Dict, Optional
-import logging
+from typing import Any
 
-logger = logging.getLogger(__name__)
+from src.config import Config, load_config
+from src.executor.bigquery_client import BigQueryExecutor
+from src.executor.data_processor import DataProcessor
+from src.exceptions import NLQAgentException, SQLGenerationError
+from src.logging_config import ContextualLogger, PerformanceLogger
+from src.query.context_builder import ContextBuilder
+from src.query.generator import SQLGenerator
+from src.query.validator import SQLValidator
+from src.types import AnalysisResult, SQL
+
+logger = ContextualLogger(__name__)
+perf = PerformanceLogger(logger)
 
 
 class NLQAgent:
-    """자연어 → SQL → 데이터 분석 에이전트"""
+    """자연어 데이터 분석 에이전트
 
-    def __init__(self, config_path: str = 'config/default.yaml'):
+    사용자의 자연어 쿼리를 BigQuery SQL로 변환하고 분석합니다.
+
+    파이프라인:
+    1. SQL 생성 (LLM)
+    2. SQL 검증
+    3. BigQuery 실행
+    4. 결과 처리 및 통계
+
+    Example:
+        agent = NLQAgent()
+        result = agent.analyze("섹터별 D+7 리텐션")
+        if result.success:
+            print(result.data.head())
+    """
+
+    def __init__(self, config: Config | None = None) -> None:
         """
         초기화
 
         Args:
-            config_path: 설정 파일 경로
+            config: Config 인스턴스 (기본값: 환경에서 로드)
         """
-        self.config_path = config_path
-        logger.info(f"NLQAgent initialized with config: {config_path}")
+        self.config = config or load_config()
+        logger.info("NLQAgent 초기화")
 
-    async def analyze(self, user_query: str) -> Dict:
+        # 모듈 초기화
+        self.validator = SQLValidator()
+        self.context_builder = ContextBuilder()
+        self.generator = SQLGenerator(self.config.llm)
+        self.bq_executor = BigQueryExecutor(self.config.bigquery)
+        self.data_processor = DataProcessor(self.config.analysis)
+
+    def analyze(self, user_query: str) -> AnalysisResult:
         """
-        자연어 쿼리 분석
-
-        흐름:
-        1. 쿼리 해석 (LLM)
-        2. SQL 생성 (LLM)
-        3. 검증 (dry-run)
-        4. 실행 (BigQuery)
-        5. 결과 반환
+        자연어 쿼리 분석 및 실행
 
         Args:
             user_query: 사용자의 자연어 쿼리
 
         Returns:
-            {
-                'query': str,           # 원본 쿼리
-                'sql': str,             # 생성된 SQL
-                'data': DataFrame,      # 분석 결과
-                'stats': Dict,          # 기본 통계
-                'explanation': str      # 쿼리 설명
-            }
+            AnalysisResult: 분석 결과
+
+        Raises:
+            NLQAgentException: 분석 중 에러
         """
-        logger.info(f"Analyzing query: {user_query}")
+        logger.set_context(user_query=user_query[:100])
 
-        return {
-            'query': user_query,
-            'status': 'P0_FRAMEWORK_ONLY',
-            'message': 'P1에서 LLM 연결 후 실행 가능',
-            'next_steps': [
-                '1. context_builder로 LLM 프롬프트 구성',
-                '2. LLM으로 SQL 생성',
-                '3. SQL 검증',
-                '4. BigQuery 실행'
-            ]
-        }
+        try:
+            # 1. SQL 생성
+            logger.info("Step 1: SQL 생성 중")
+            with perf.timer("generate_sql"):
+                sql_result = self.generator.generate_with_validation(
+                    user_query, self.validator
+                )
 
-    def _interpret_query(self, query: str) -> Dict:
-        """자연어 쿼리 해석 (P1에서 구현)"""
-        pass
+            if not sql_result.is_success():
+                raise SQLGenerationError(
+                    sql_result.error or "SQL 생성 실패", user_query=user_query
+                )
 
-    def _generate_sql(self, interpretation: Dict) -> str:
-        """SQL 생성 (P1에서 구현)"""
-        pass
+            sql = sql_result.data
+            logger.info(f"SQL 생성 완료: {len(sql)} chars")
 
-    def _validate_sql(self, sql: str) -> bool:
-        """SQL 검증 (P1에서 구현)"""
-        pass
+            # 2. BigQuery 실행
+            logger.info("Step 2: BigQuery 실행 중")
+            with perf.timer("execute_query"):
+                exec_result = self.bq_executor.execute(
+                    sql, max_results=self.config.bigquery.max_results
+                )
 
-    def _execute_query(self, sql: str) -> Dict:
-        """BigQuery 실행 (P1에서 구현)"""
-        pass
+            if not exec_result.is_success():
+                raise NLQAgentException(
+                    exec_result.error or "BigQuery 실행 실패"
+                )
+
+            df = exec_result.data
+            logger.info(f"쿼리 완료: {len(df)} rows")
+
+            # 3. 데이터 처리
+            logger.info("Step 3: 데이터 처리 중")
+            with perf.timer("process_data"):
+                proc_result = self.data_processor.process(df)
+
+            if not proc_result.is_success():
+                raise NLQAgentException(
+                    proc_result.error or "데이터 처리 실패"
+                )
+
+            proc_data = proc_result.data
+
+            logger.info("분석 완료")
+
+            # 결과 조합
+            return AnalysisResult(
+                query=user_query,
+                sql=sql,
+                data=proc_data["df_cleaned"],
+                stats=proc_data["stats"],
+                explanation=proc_data["explanation"],
+                success=True,
+                data_quality=proc_data["data_quality"],
+                sample_warning=proc_data["sample_warning"],
+            )
+
+        except NLQAgentException as e:
+            logger.error(f"분석 실패: {e}")
+            return AnalysisResult(
+                query=user_query,
+                sql="",
+                data=None,
+                stats={},
+                explanation="",
+                success=False,
+                error=str(e),
+            )
+
+        except Exception as e:
+            logger.exception(f"예상치 못한 오류: {str(e)}")
+            return AnalysisResult(
+                query=user_query,
+                sql="",
+                data=None,
+                stats={},
+                explanation="",
+                success=False,
+                error=f"예상치 못한 오류: {str(e)}",
+            )
 
 
-# P0 테스트용 헬퍼
-def test_context_loading():
-    """BigQuery 컨텍스트 로드 테스트"""
-    try:
-        from src.bigquery_context import (
-            BIGQUERY_SCHEMA,
-            SAMPLE_EVENTS,
-            SUCCESSFUL_QUERIES,
-            ANTIPATTERNS,
-            SECTORS
-        )
+# CLI 진입점
+def main() -> None:
+    """CLI 인터페이스"""
+    import sys
 
-        print("✓ schema_full.py loaded")
-        print(f"  - Tables: {list(BIGQUERY_SCHEMA.keys())}")
+    if len(sys.argv) < 2:
+        print("사용법: python -m src.agent '<쿼리>'")
+        sys.exit(1)
 
-        print("✓ sample_data.py loaded")
-        print(f"  - Sample events: {len(SAMPLE_EVENTS)}")
+    query = sys.argv[1]
+    agent = NLQAgent()
+    result = agent.analyze(query)
 
-        print("✓ successful_queries.py loaded")
-        print(f"  - Query examples: {len(SUCCESSFUL_QUERIES)}")
-
-        print("✓ antipatterns.py loaded")
-        print(f"  - Patterns: {len(ANTIPATTERNS)}")
-
-        print("✓ domain_knowledge.py loaded")
-        print(f"  - Sectors: {list(SECTORS.keys())}")
-
-        return True
-    except Exception as e:
-        logger.error(f"Context loading failed: {e}")
-        return False
+    if result.success:
+        print(f"SQL:\n{result.sql}\n")
+        print(f"결과 ({len(result.data)} rows):")
+        print(result.data.head())
+        print(f"\n{result.explanation}")
+    else:
+        print(f"오류: {result.error}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    print("NLQAgent P0 Framework Test\n")
-
-    if test_context_loading():
-        print("\n✓ All BigQuery contexts loaded successfully")
-        print("\nP0 Status: Complete ✓")
-        print("Next: P1 - LLM 통합 및 SQL 생성")
-    else:
-        print("\n✗ Context loading failed")
+    main()
