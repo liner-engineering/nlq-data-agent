@@ -8,6 +8,7 @@ import os
 import streamlit as st
 import pandas as pd
 from src.agent import NLQAgent
+from src.analysis.service_analysis_agent import ServiceAnalysisAgent
 from src.exceptions import NLQAgentException
 
 # 페이지 설정
@@ -35,6 +36,17 @@ def get_agent():
         return agent
     except Exception as e:
         st.error(f"에이전트 초기화 실패: {str(e)}")
+        st.stop()
+
+
+@st.cache_resource
+def get_analysis_agent():
+    """ServiceAnalysisAgent 싱글톤 (Streamlit 캐싱)"""
+    try:
+        agent = ServiceAnalysisAgent()
+        return agent
+    except Exception as e:
+        st.error(f"분석 에이전트 초기화 실패: {str(e)}")
         st.stop()
 
 
@@ -84,6 +96,49 @@ def display_results(result):
         st.error(f"쿼리 실행 실패: {result.error}")
 
 
+def display_analysis_results(result):
+    """분석 결과 표시"""
+    st.subheader(f"📊 {result.analysis_type}")
+
+    # 주요 지표
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("행 수", len(result.data))
+    with col2:
+        st.metric("컬럼 수", len(result.data.columns))
+    with col3:
+        st.metric("신뢰도", f"{result.confidence:.0%}")
+    with col4:
+        st.metric("통계 검정", len(result.test_results))
+
+    # 데이터 표시
+    st.subheader("📈 데이터")
+    st.dataframe(result.data, use_container_width=True)
+
+    # 인사이트
+    st.subheader("💡 주요 인사이트")
+    for insight in result.insights:
+        st.write(f"• {insight}")
+
+    # 추천사항
+    st.subheader("🎯 추천사항")
+    for rec in result.recommendations:
+        st.write(f"→ {rec}")
+
+    # 통계 검정 결과
+    if result.test_results:
+        st.subheader("📊 통계 검정")
+        for test in result.test_results:
+            with st.expander(f"{test.test_name} (p={test.p_value:.4f})"):
+                st.json(test.to_dict())
+
+    # 상세 통계
+    if result.statistics:
+        st.subheader("📋 상세 통계")
+        with st.expander("통계 정보"):
+            st.json(result.statistics)
+
+
 def main():
     # 헤더
     st.title("🚀 NLQ Data Agent")
@@ -125,46 +180,80 @@ def main():
         st.divider()
         st.markdown("### 도움말")
         st.markdown("""
-        **사용 방법:**
-        1. 자연어로 질문을 입력
-        2. '🚀 실행' 버튼 클릭
-        3. 생성된 SQL과 결과 확인
+        **NLQ 모드:**
+        자유로운 자연어 쿼리로 맞춤형 SQL 생성
+
+        **분석 모드:**
+        자동 분석 템플릿 + 통계 검정
 
         **예시 질문:**
         - "2026년 4월 professional 섹터의 D+7 리텐션이 몇 퍼센트인가?"
-        - "섹터별 평균 리텐션을 보여줘"
-        - "가장 활발한 사용자 그룹은 어디인가?"
+        - "전환율이 어떻게 되나요?"
+        - "이탈 사용자의 특징은?"
         """)
 
-    # 메인 영역
-    st.subheader("📝 질문을 입력하세요")
+    # 탭 선택
+    tab1, tab2 = st.tabs(["🔍 NLQ 쿼리", "📊 자동 분석"])
 
-    user_query = st.text_area(
-        "자연어 쿼리",
-        placeholder="예: 2026년 4월 professional 섹터의 D+7 리텐션이 몇 퍼센트인가?",
-        height=100,
-        label_visibility="collapsed"
-    )
+    # 탭 1: NLQ 쿼리
+    with tab1:
+        st.subheader("📝 자유 쿼리 입력")
+        st.markdown("*LLM이 자동으로 SQL을 생성합니다*")
 
-    # 실행 버튼
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        run_button = st.button("🚀 실행", type="primary")
+        user_query = st.text_area(
+            "자연어 쿼리",
+            placeholder="예: 2026년 4월 professional 섹터의 D+7 리텐션이 몇 퍼센트인가?",
+            height=100,
+            label_visibility="collapsed",
+            key="nlq_query"
+        )
 
-    # 결과 표시
-    if run_button:
-        if not user_query.strip():
-            st.error("질문을 입력해주세요.")
-        else:
-            try:
-                with st.spinner("쿼리 분석 중..."):
-                    agent = get_agent()
-                    result = agent.analyze(user_query)
-                    display_results(result)
-            except NLQAgentException as e:
-                st.error(f"에이전트 오류: {e.to_dict()}")
-            except Exception as e:
-                st.error(f"예상치 못한 오류: {str(e)}")
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            run_nlq = st.button("🚀 실행", type="primary", key="nlq_run")
+
+        if run_nlq:
+            if not user_query.strip():
+                st.error("질문을 입력해주세요.")
+            else:
+                try:
+                    with st.spinner("쿼리 분석 중..."):
+                        agent = get_agent()
+                        result = agent.analyze(user_query)
+                        display_results(result)
+                except NLQAgentException as e:
+                    st.error(f"에이전트 오류: {e.to_dict()}")
+                except Exception as e:
+                    st.error(f"예상치 못한 오류: {str(e)}")
+
+    # 탭 2: 자동 분석
+    with tab2:
+        st.subheader("📊 자동 분석")
+        st.markdown("*키워드를 인식하여 자동으로 분석을 수행합니다*")
+
+        analysis_query = st.text_area(
+            "분석 질문",
+            placeholder="예: 전환율이 어떻게 되나요? / 이탈 사용자는? / 리텐션 분석",
+            height=100,
+            label_visibility="collapsed",
+            key="analysis_query"
+        )
+
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            run_analysis = st.button("🚀 분석", type="primary", key="analysis_run")
+
+        if run_analysis:
+            if not analysis_query.strip():
+                st.error("질문을 입력해주세요.")
+            else:
+                try:
+                    with st.spinner("분석 중..."):
+                        analysis_agent = get_analysis_agent()
+                        result = analysis_agent.analyze_question(analysis_query)
+                        display_analysis_results(result)
+                except Exception as e:
+                    st.error(f"분석 실패: {str(e)}")
 
 
 if __name__ == "__main__":
