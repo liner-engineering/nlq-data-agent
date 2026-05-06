@@ -10,7 +10,7 @@ from typing import Any
 from src.bigquery_context import (
     ANTIPATTERNS,
     BIGQUERY_SCHEMA,
-    SAMPLE_DATA,
+    SAMPLE_EVENTS,
     SECTORS,
     SUCCESSFUL_QUERIES,
 )
@@ -55,7 +55,7 @@ SELECT ...
         self.schema = BIGQUERY_SCHEMA
         self.success_queries = SUCCESSFUL_QUERIES
         self.antipatterns = ANTIPATTERNS
-        self.sample_data = SAMPLE_DATA
+        self.sample_events = SAMPLE_EVENTS
         self.sectors = SECTORS
 
     def build_prompt(self, user_query: str) -> str:
