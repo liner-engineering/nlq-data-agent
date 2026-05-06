@@ -87,7 +87,12 @@ class ServiceAnalysisAgent:
             template = find_template(question)
             analysis_type = template.name if template else "자유 분석"
 
-            logger.info(f"분석 유형: {analysis_type}")
+            # 템플릿 선택 사유 기록
+            if template:
+                matched_keywords = [kw for kw in template.keywords if kw in question.lower()]
+                logger.info(f"분석 유형: {analysis_type} (매칭 키워드: {', '.join(matched_keywords)})")
+            else:
+                logger.info(f"분석 유형: {analysis_type} (템플릿 미매칭, LLM 자유 분석)")
 
             # 2. SQL 생성 및 실행
             if template:
@@ -186,22 +191,10 @@ class ServiceAnalysisAgent:
                             )
                             results.append(test_result)
 
-            elif template and 'conversion' in template.name.lower():
-                # 전환율 분석
-                if 'conversion_rate_pct' in data.columns:
-                    conversion_rates = data['conversion_rate_pct'].dropna()
-                    if len(conversion_rates) > 1:
-                        test_result = self.tester.proportion_ztest(
-                            count=int((conversion_rates >= 20).sum()),
-                            nobs=len(conversion_rates),
-                            value=0.5
-                        )
-                        results.append(test_result)
-
             elif template and 'churn' in template.name.lower():
                 # 이탈 분석: 상태별 카이제곱 검정
-                if 'churn_status' in data.columns and 'user_count' in data.columns:
-                    contingency = data.set_index('churn_status')['user_count'].to_dict()
+                if 'status' in data.columns and 'user_count' in data.columns:
+                    contingency = data.set_index('status')['user_count'].to_dict()
                     if len(contingency) >= 2:
                         test_result = self.tester.chi_square_test(
                             contingency, category_name="이탈 상태"
@@ -230,9 +223,9 @@ class ServiceAnalysisAgent:
         # 통계 검정 결과
         for test in test_results:
             if test.significant:
-                insights.append(f"✓ {test.interpretation}")
+                insights.append(f"[유의미] {test.interpretation}")
             else:
-                insights.append(f"- {test.interpretation}")
+                insights.append(f"[무의미] {test.interpretation}")
 
         # 수치 데이터 기반 인사이트
         numeric_cols = data.select_dtypes(include=['number']).columns

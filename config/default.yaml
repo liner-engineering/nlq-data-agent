@@ -10,6 +10,7 @@ bigquery:
   location: US
   timeout_seconds: 300
   max_results: 10000
+  maximum_bytes_billed: 1000000000000
 
 analysis:
   min_sample_size: 10
@@ -18,8 +19,9 @@ analysis:
 
 llm:
   provider: litellm
-  model: gemini-2.5-flash-lite
+  model: gemini-2.5-flash-lite-ai-studio
   api_key_env: LITELLM_API_KEY
+  base_url_env: LITELLM_BASE_URL
   temperature: 0.2
   max_tokens: 2000
 

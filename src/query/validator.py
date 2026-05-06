@@ -36,13 +36,17 @@ class SQLValidator:
     """
 
     # 정규식 캐싱 (성능 최적화)
+    _CTE_PATTERN = re.compile(r"(?:WITH|,)\s+(\w+)\s+AS\s*\(", re.IGNORECASE)  # CTE 이름 추출 (여러 개 지원)
     _TABLE_PATTERN = re.compile(r"(?:FROM|JOIN)\s+`?([a-zA-Z0-9_.-]+)`?", re.IGNORECASE)
     _DATE_PATTERN = re.compile(r"[\"'](\d{4}-\d{2}-\d{2})[\"']")
     _BETWEEN_PATTERN = re.compile(
         r'BETWEEN\s+["\'](\d{4}-\d{2}-\d{2})["\']\s+AND\s+["\'](\d{4}-\d{2}-\d{2})["\']'
     )
     _AGGREGATE_PATTERN = re.compile(r"(COUNT|SUM|AVG|MIN|MAX)\s*\(", re.IGNORECASE)
-    _USER_SPECIFIC_PATTERN = re.compile(r"user_id\s*=\s*[\"']?[a-zA-Z0-9_]+[\"']?", re.IGNORECASE)
+    _USER_SPECIFIC_PATTERN = re.compile(
+        r"user_id\s*=\s*(?:\d+|[\"'][^\"']+[\"'])",
+        re.IGNORECASE,
+    )
 
     def __init__(self) -> None:
         """초기화"""
@@ -73,9 +77,9 @@ class SQLValidator:
 
         sql_upper = sql.upper()
 
-        # 1. SELECT 시작 확인
-        if not sql_upper.startswith("SELECT"):
-            errors.append("SQL은 SELECT로 시작해야 합니다")
+        # 1. SELECT 또는 WITH 시작 확인
+        if not (sql_upper.startswith("SELECT") or sql_upper.startswith("WITH")):
+            errors.append("SQL은 SELECT 또는 WITH로 시작해야 합니다")
 
         # 2. 테이블명 검증
         table_errors = self._validate_table_names(sql)
@@ -102,6 +106,10 @@ class SQLValidator:
         groupby_warnings = self._validate_group_by(sql)
         warnings.extend(groupby_warnings)
 
+        # 8. 시간 범위 검증
+        time_range_warnings = self._validate_time_range(sql)
+        warnings.extend(time_range_warnings)
+
         # 결과 반환
         is_valid = len(errors) == 0
 
@@ -114,14 +122,21 @@ class SQLValidator:
 
     def _validate_table_names(self, sql: str) -> list[str]:
         """
-        테이블명 검증
+        테이블명 검증 (CTE 제외)
 
         Returns:
             오류 목록
         """
         errors: list[str] = []
 
+        # CTE 이름 추출 (WITH 절에서)
+        cte_names = set(self._CTE_PATTERN.findall(sql))
+
         for table in self._TABLE_PATTERN.findall(sql):
+            # CTE 이름이면 스킵 (실제 테이블이 아님)
+            if table in cte_names:
+                continue
+
             # 프로젝트명 포함 여부 확인
             if "." in table:
                 short_table = ".".join(table.split(".")[-2:])
@@ -186,12 +201,15 @@ class SQLValidator:
         sql_upper = sql.upper()
         sql_lower = sql.lower()
 
-        # 1. 특정 사용자만 조회하는 패턴
-        if self._USER_SPECIFIC_PATTERN.search(sql) and "GROUP BY" not in sql_upper:
-            warnings.append(
-                "특정 사용자 1명만 조회하는 것 같습니다. "
-                "GROUP BY를 사용해서 집계하세요"
-            )
+        # 1. 특정 사용자만 조회하는 패턴 (WHERE 절에서만 감지, ON 절 제외)
+        where_match = re.search(r"WHERE\s+(.*?)(?:GROUP BY|ORDER BY|LIMIT|;|$)", sql, re.IGNORECASE | re.DOTALL)
+        if where_match and "GROUP BY" not in sql_upper:
+            where_clause = where_match.group(1)
+            if self._USER_SPECIFIC_PATTERN.search(where_clause):
+                warnings.append(
+                    "특정 사용자 1명만 조회하는 것 같습니다. "
+                    "GROUP BY를 사용해서 집계하세요"
+                )
 
         # 2. NOW() 함수 사용
         if "NOW()" in sql_upper and "DATE_DIFF" in sql_upper:
@@ -264,5 +282,35 @@ class SQLValidator:
             # COUNT(*)는 전체 집계이므로 GROUP BY 불필요
             if "COUNT(*)" not in sql.upper():
                 warnings.append("집계 함수를 사용하면 GROUP BY절을 추가하는 것을 권장합니다")
+
+        return warnings
+
+    def _validate_time_range(self, sql: str) -> list[str]:
+        """
+        시간 범위 검증 (EVENTS_296805 사용 시)
+
+        Returns:
+            경고 목록
+        """
+        warnings: list[str] = []
+        sql_lower = sql.lower()
+
+        if "events_296805" in sql_lower:
+            # 시간 범위 필터 확인
+            has_date_filter = (
+                "date(event_time)" in sql_lower
+                or "event_time >=" in sql_lower
+                or "event_time <=" in sql_lower
+                or "event_time between" in sql_lower
+                or "date_diff" in sql_lower
+                or "date_sub" in sql_lower
+                or "date_add" in sql_lower
+            )
+
+            if not has_date_filter:
+                warnings.append(
+                    "EVENTS_296805 쿼리에 시간 범위 필터가 없습니다. "
+                    "비용과 성능을 위해 WHERE DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) 추가를 권장합니다"
+                )
 
         return warnings

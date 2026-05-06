@@ -138,6 +138,8 @@ class NLQAgent:
                 explanation="",
                 success=False,
                 error=str(e),
+                data_quality={},
+                sample_warning="",
             )
 
         except Exception as e:
@@ -150,6 +152,8 @@ class NLQAgent:
                 explanation="",
                 success=False,
                 error=f"예상치 못한 오류: {str(e)}",
+                data_quality={},
+                sample_warning="",
             )
 
 

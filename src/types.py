@@ -160,18 +160,21 @@ class AnalysisResult:
         explanation: 결과 해석
         success: 분석 성공 여부
         error: 오류 메시지 (실패 시)
+        data_quality: 데이터 품질 정보
+        sample_warning: 샘플 크기 경고
     """
 
     def __init__(
         self,
         query: str,
         sql: str,
-        data: pd.DataFrame,
+        data: pd.DataFrame | None,
         stats: Stats,
         explanation: str,
         success: bool = True,
         error: str | None = None,
-        **kwargs: Any,
+        data_quality: dict[str, Any] | None = None,
+        sample_warning: str | None = None,
     ):
         self.query = query
         self.sql = sql
@@ -180,7 +183,8 @@ class AnalysisResult:
         self.explanation = explanation
         self.success = success
         self.error = error
-        self.extra = kwargs
+        self.data_quality = data_quality or {}
+        self.sample_warning = sample_warning or ""
 
     def to_dict(self) -> dict[str, Any]:
         """사전으로 변환"""
@@ -192,7 +196,8 @@ class AnalysisResult:
             "explanation": self.explanation,
             "success": self.success,
             "error": self.error,
-            **self.extra,
+            "data_quality": self.data_quality,
+            "sample_warning": self.sample_warning,
         }
 
     def to_json_serializable(self) -> dict[str, Any]:
@@ -206,6 +211,8 @@ class AnalysisResult:
             "explanation": self.explanation,
             "success": self.success,
             "error": self.error,
+            "data_quality": self.data_quality,
+            "sample_warning": self.sample_warning,
         }
 
 

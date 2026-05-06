@@ -235,7 +235,8 @@ class StatisticalTester:
             TestResult
         """
         try:
-            z_stat, p_value = stats.norm.sf(abs((count / nobs - value) / np.sqrt(value * (1 - value) / nobs))) * 2
+            z_stat = (count / nobs - value) / np.sqrt(value * (1 - value) / nobs)
+            p_value = 2 * stats.norm.sf(abs(z_stat))
 
             significant = p_value < 0.05
             interpretation = (

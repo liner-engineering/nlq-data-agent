@@ -77,8 +77,8 @@ class DataProcessor:
             # 3. 데이터 품질 평가
             data_quality = self._assess_quality(df)
 
-            # 4. 샘플 크기 경고
-            sample_warning = self._generate_sample_warning(num_rows)
+            # 4. 샘플 크기 경고 (df 기반으로)
+            sample_warning = self._generate_sample_warning(df_cleaned)
 
             # 5. 설명 생성
             explanation = self._generate_explanation(
@@ -193,28 +193,70 @@ class DataProcessor:
             "completeness_pct": round(completeness, 1),
         }
 
-    def _generate_sample_warning(self, num_rows: int) -> str:
+    def _estimate_sample_size(self, df: pd.DataFrame) -> int:
+        """
+        결과의 의미론적 샘플 크기 추정.
+        - count/users/total 류 컬럼이 있으면 그 합계를 사용
+        - 없으면 행 수
+
+        Args:
+            df: DataFrame
+
+        Returns:
+            추정된 샘플 크기
+        """
+        if df.empty:
+            return 0
+
+        # 사용자/이벤트 수를 나타내는 컬럼 패턴
+        count_col_patterns = [
+            'user', 'users', 'count', 'total', 'n_', '_n',
+            'distinct_users', 'cohort_size', 'sample_size', 'events'
+        ]
+
+        numeric_cols = df.select_dtypes(include=['number']).columns
+        candidate_cols = [
+            c for c in numeric_cols
+            if any(p in c.lower() for p in count_col_patterns)
+            and 'rate' not in c.lower()
+            and 'pct' not in c.lower()
+            and 'avg' not in c.lower()
+            and 'mean' not in c.lower()
+            and 'std' not in c.lower()
+            and 'median' not in c.lower()
+        ]
+
+        if candidate_cols:
+            # 가장 큰 카운트 컬럼의 합계 (보통 분모)
+            max_sum = max(df[c].sum() for c in candidate_cols)
+            return int(max_sum)
+
+        return len(df)
+
+    def _generate_sample_warning(self, df: pd.DataFrame) -> str:
         """
         샘플 크기 경고 생성
 
         Args:
-            num_rows: 데이터 행 수
+            df: DataFrame
 
         Returns:
             경고 메시지
         """
-        if num_rows < self.config.min_sample_size:
+        sample_size = self._estimate_sample_size(df)
+
+        if sample_size < self.config.min_sample_size:
             return (
-                f"⚠️ 샘플 크기 부족 ({num_rows}개). "
+                f"샘플 크기 부족 (n={sample_size}). "
                 f"결과가 의미 없을 수 있습니다."
             )
-        elif num_rows < self.config.recommended_sample_size:
+        elif sample_size < self.config.recommended_sample_size:
             return (
-                f"⚠️ 샘플 크기 작음 ({num_rows}개). "
+                f"샘플 크기 작음 (n={sample_size}). "
                 f"통계적 신뢰성이 낮을 수 있습니다."
             )
         else:
-            return f"✓ 충분한 샘플 크기 ({num_rows}개)"
+            return f"충분한 샘플 크기 (n={sample_size:,})"
 
     def _generate_explanation(
         self, df: pd.DataFrame, stats: Stats, sample_warning: str
@@ -232,13 +274,28 @@ class DataProcessor:
         """
         parts = [sample_warning]
 
-        # 핵심 통계
+        # 단일 행 결과 (스칼라)
+        if len(df) == 1:
+            parts.append("\n결과:")
+            for col in df.columns:
+                val = df.iloc[0][col]
+                if isinstance(val, (int, float)):
+                    # 천 단위 구분
+                    if isinstance(val, float):
+                        parts.append(f"  - {col}: {val:.2f}")
+                    else:
+                        parts.append(f"  - {col}: {val:,}")
+                else:
+                    parts.append(f"  - {col}: {val}")
+            return "\n".join(parts)
+
+        # 다행 결과 (집계)
         if stats:
             parts.append("\n핵심 지표:")
             for col, col_stats in list(stats.items())[:3]:  # 처음 3개
                 mean = col_stats["mean"]
                 count = col_stats["count"]
-                parts.append(f"  - {col}: 평균 {mean} (n={count})")
+                parts.append(f"  - {col}: 평균 {mean:,.1f} (n={count})")
 
         # 데이터셋 정보
         if len(df.columns) > 0:

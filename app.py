@@ -54,16 +54,16 @@ def display_results(result):
     """결과 표시"""
     if result.success:
         # SQL 표시
-        st.subheader("✅ 생성된 SQL")
+        st.subheader("생성된 SQL")
         st.code(result.sql, language="sql")
 
         # 결과 DataFrame
-        st.subheader("📊 쿼리 결과")
+        st.subheader("쿼리 결과")
         st.dataframe(result.data, use_container_width=True)
 
         # 통계 정보
         if result.stats:
-            st.subheader("📈 통계 정보")
+            st.subheader("통계 정보")
             cols = st.columns(3)
             with cols[0]:
                 st.metric("행 수", len(result.data))
@@ -78,18 +78,20 @@ def display_results(result):
                 st.json(result.stats)
 
         # 샘플 크기 경고
-        if result.sample_warning:
-            st.warning(result.sample_warning)
+        sample_warning = getattr(result, 'sample_warning', '')
+        if sample_warning:
+            st.warning(sample_warning)
 
         # 데이터 품질 정보
-        if result.data_quality:
-            st.subheader("📋 데이터 품질")
+        data_quality = getattr(result, 'data_quality', {})
+        if data_quality:
+            st.subheader("데이터 품질")
             with st.expander("상세 정보"):
-                st.json(result.data_quality)
+                st.json(data_quality)
 
         # 설명
         if result.explanation:
-            st.subheader("💭 분석 결과")
+            st.subheader("분석 결과")
             st.info(result.explanation)
 
     else:
@@ -97,7 +99,7 @@ def display_results(result):
 
 
 def display_analysis_results(result):
-    """분석 결과 표시"""
+    """분석 결과 표시 (이모지 제거)"""
     st.subheader(f"📊 {result.analysis_type}")
 
     # 주요 지표
@@ -112,46 +114,46 @@ def display_analysis_results(result):
         st.metric("통계 검정", len(result.test_results))
 
     # 데이터 표시
-    st.subheader("📈 데이터")
+    st.subheader("데이터")
     st.dataframe(result.data, use_container_width=True)
 
     # 인사이트
-    st.subheader("💡 주요 인사이트")
+    st.subheader("주요 인사이트")
     for insight in result.insights:
         st.write(f"• {insight}")
 
     # 추천사항
-    st.subheader("🎯 추천사항")
+    st.subheader("추천사항")
     for rec in result.recommendations:
         st.write(f"→ {rec}")
 
     # 통계 검정 결과
     if result.test_results:
-        st.subheader("📊 통계 검정")
+        st.subheader("통계 검정")
         for test in result.test_results:
             with st.expander(f"{test.test_name} (p={test.p_value:.4f})"):
                 st.json(test.to_dict())
 
     # 상세 통계
     if result.statistics:
-        st.subheader("📋 상세 통계")
+        st.subheader("상세 통계")
         with st.expander("통계 정보"):
             st.json(result.statistics)
 
 
 def main():
     # 헤더
-    st.title("🚀 NLQ Data Agent")
+    st.title("NLQ Data Agent")
     st.markdown("자연어로 데이터를 분석하세요. SQL을 자동으로 생성하고 실행합니다.")
 
     # 사이드바 설정 (선택사항)
     with st.sidebar:
-        st.header("⚙️ 설정")
+        st.header("설정")
 
         with st.expander("모델 설정", expanded=False):
             model_name = st.text_input(
                 "LLM 모델",
-                value="gemini-2.5-flash-lite",
+                value="gemini-2.5-flash-lite-ai-studio",
                 help="LiteLLM을 통해 지원되는 모델명"
             )
             temperature = st.slider(
@@ -172,7 +174,7 @@ def main():
 
         # 환경 변수 확인
         api_key_set = bool(os.getenv("LITELLM_API_KEY"))
-        st.markdown(f"**API 키 설정**: {'✅ 설정됨' if api_key_set else '❌ 미설정'}")
+        st.markdown(f"**API 키 설정**: {'설정됨' if api_key_set else '미설정'}")
 
         if not api_key_set:
             st.warning("LITELLM_API_KEY 환경 변수가 설정되어 있지 않습니다.")
@@ -193,16 +195,16 @@ def main():
         """)
 
     # 탭 선택
-    tab1, tab2 = st.tabs(["🔍 NLQ 쿼리", "📊 자동 분석"])
+    tab1, tab2 = st.tabs(["NLQ 쿼리", "자동 분석"])
 
     # 탭 1: NLQ 쿼리
     with tab1:
-        st.subheader("📝 자유 쿼리 입력")
+        st.subheader("자유 쿼리 입력")
         st.markdown("*LLM이 자동으로 SQL을 생성합니다*")
 
         user_query = st.text_area(
             "자연어 쿼리",
-            placeholder="예: 2026년 4월 professional 섹터의 D+7 리텐션이 몇 퍼센트인가?",
+            placeholder="예: 섹터별 리텐션을 알고 싶어요 / 파워 사용자 분석 / 이탈 사용자는?",
             height=100,
             label_visibility="collapsed",
             key="nlq_query"
@@ -210,19 +212,98 @@ def main():
 
         col1, col2 = st.columns([1, 4])
         with col1:
-            run_nlq = st.button("🚀 실행", type="primary", key="nlq_run")
+            generate_sql = st.button("SQL 생성", type="primary", key="nlq_generate")
 
-        if run_nlq:
-            if not user_query.strip():
+        if generate_sql:
+            query_stripped = user_query.strip()
+            if not query_stripped:
                 st.error("질문을 입력해주세요.")
+            elif len(query_stripped) < 5:
+                st.error("너무 짧은 질문입니다. 좀 더 자세히 설명해주세요.")
+                st.info("예: '섹터별 리텐션 분석', '파워 사용자는 누가 있나요?'")
             else:
                 try:
-                    with st.spinner("쿼리 분석 중..."):
+                    with st.spinner("SQL 생성 중..."):
                         agent = get_agent()
-                        result = agent.analyze(user_query)
-                        display_results(result)
-                except NLQAgentException as e:
-                    st.error(f"에이전트 오류: {e.to_dict()}")
+                        from src.query.generator import SQLGenerator
+                        from src.query.validator import SQLValidator
+
+                        validator = SQLValidator()
+                        generator = SQLGenerator(agent.config.llm)
+
+                        # NLQ 탭은 항상 LLM이 SQL 생성 (템플릿 무시)
+                        sql_result = generator.generate_with_validation(query_stripped, validator)
+
+                        if sql_result.is_success():
+                            st.session_state.pending_sql = sql_result.data
+                            st.session_state.pending_query = query_stripped
+                            st.success("SQL 생성 완료!")
+                        else:
+                            st.error(f"SQL 생성 실패: {sql_result.error}")
+                except Exception as e:
+                    import traceback
+                    st.error(f"예상치 못한 오류: {str(e)}")
+                    st.write(traceback.format_exc())
+
+        # SQL이 생성된 경우 표시
+        if "pending_sql" in st.session_state:
+            st.subheader("생성된 SQL (검토 후 실행하세요)")
+            st.code(st.session_state.pending_sql, language="sql")
+
+            col1, col2 = st.columns([1, 4])
+            with col1:
+                confirm_execute = st.button("실행", type="primary", key="nlq_execute")
+            with col2:
+                cancel_sql = st.button("취소", key="nlq_cancel")
+
+            if cancel_sql:
+                del st.session_state.pending_sql
+                del st.session_state.pending_query
+                st.rerun()
+
+            if confirm_execute:
+                try:
+                    with st.spinner("쿼리 실행 중..."):
+                        agent = get_agent()
+                        from src.executor.bigquery_client import BigQueryExecutor
+                        from src.executor.data_processor import DataProcessor
+
+                        # BigQuery 실행
+                        bq_executor = BigQueryExecutor(agent.config.bigquery)
+                        exec_result = bq_executor.execute(
+                            st.session_state.pending_sql,
+                            max_results=agent.config.bigquery.max_results
+                        )
+
+                        if not exec_result.is_success():
+                            st.error(f"쿼리 실행 실패: {exec_result.error}")
+                        else:
+                            df = exec_result.data
+
+                            # 데이터 처리
+                            data_processor = DataProcessor(agent.config.analysis)
+                            proc_result = data_processor.process(df)
+
+                            if proc_result.is_success():
+                                proc_data = proc_result.data
+                                from src.types import AnalysisResult
+                                analysis_result = AnalysisResult(
+                                    query=st.session_state.pending_query,
+                                    sql=st.session_state.pending_sql,
+                                    data=proc_data["df_cleaned"],
+                                    stats=proc_data["stats"],
+                                    explanation=proc_data["explanation"],
+                                    success=True,
+                                    data_quality=proc_data["data_quality"],
+                                    sample_warning=proc_data["sample_warning"],
+                                )
+                                display_results(analysis_result)
+
+                                # 완료 후 상태 초기화
+                                del st.session_state.pending_sql
+                                del st.session_state.pending_query
+                            else:
+                                st.error(f"데이터 처리 실패: {proc_result.error}")
                 except Exception as e:
                     st.error(f"예상치 못한 오류: {str(e)}")
 
@@ -244,13 +325,17 @@ def main():
             run_analysis = st.button("🚀 분석", type="primary", key="analysis_run")
 
         if run_analysis:
-            if not analysis_query.strip():
+            query_stripped = analysis_query.strip()
+            if not query_stripped:
                 st.error("질문을 입력해주세요.")
+            elif len(query_stripped) < 5:
+                st.error("너무 짧은 질문입니다. 좀 더 자세히 설명해주세요.")
+                st.info("예: '리텐션 분석', '이탈 사용자 특징', '쿼리 볼륨 추세'")
             else:
                 try:
                     with st.spinner("분석 중..."):
                         analysis_agent = get_analysis_agent()
-                        result = analysis_agent.analyze_question(analysis_query)
+                        result = analysis_agent.analyze_question(query_stripped)
                         display_analysis_results(result)
                 except Exception as e:
                     st.error(f"분석 실패: {str(e)}")

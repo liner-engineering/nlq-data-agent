@@ -15,6 +15,7 @@ from src.bigquery_context import (
     SUCCESSFUL_QUERIES,
 )
 from src.exceptions import ContextBuildingError
+from src.query.example_selector import get_selector
 
 
 class ContextBuilder:
@@ -32,14 +33,48 @@ class ContextBuilder:
 
 사용자의 자연어 쿼리를 정확한 BigQuery SQL로 변환하는 것이 목표입니다.
 
-## 핵심 규칙
+## ⚠️ CRITICAL: 시간 범위 필수
 
-1. **항상 DISTINCT 사용**: 특히 조인 후 중복 제거
-2. **GROUP BY 필수**: 집계 함수 사용 시 반드시 포함
-3. **event_properties는 JSON**: JSON_EXTRACT_SCALAR()로 추출
-4. **테이블명 전체 경로**: liner-219011.analysis.EVENTS_296805
-5. **날짜 형식**: YYYY-MM-DD (따옴표 포함)
-6. **샘플 크기**: HAVING 절로 최소 10명 이상 확인
+**모든 EVENTS_296805 쿼리는 반드시 시간 범위를 포함해야 합니다.**
+
+- 사용자가 기간을 명시하지 않으면: `WHERE DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)` (최근 30일)
+- 사용자가 기간을 명시하면: `WHERE DATE(event_time) BETWEEN '시작날짜' AND '종료날짜'`
+- 절대 시간 필터 없이 풀스캔하지 말 것 (비용, 성능, 정확성 문제)
+
+## ⚠️ CRITICAL: 사용자 세그먼트 분류 방법
+
+**중요**: Liner의 사용자 분류는 "쿼리 내용"으로 한다!
+
+- make_chat 이벤트의 query 텍스트를 분석한다
+- 예: "이력서", "취업", "면접" 키워드 → "취업 관심 사용자"
+- 예: "영문", "수료증" 키워드 → "교육 관심 사용자"
+- 예: "컨설팅", "법률" 키워드 → "비즈니스 사용자"
+
+## 핵심 SQL 패턴
+
+1. **make_chat 이벤트에서 쿼리 추출**:
+   ```sql
+   JSON_EXTRACT_SCALAR(event_properties, '$.query') as query_text
+   ```
+
+2. **키워드로 사용자 필터링**:
+   ```sql
+   WHERE event_type = 'make_chat'
+     AND LOWER(JSON_EXTRACT_SCALAR(event_properties, '$.query')) LIKE '%키워드%'
+   ```
+
+3. **사용자 마스터 테이블 조인** (선택):
+   ```sql
+   FROM `liner-219011.analysis.EVENTS_296805` e
+   JOIN `liner-219011.like.dim_user` u ON e.user_id = u.user_id
+   ```
+
+## 규칙
+
+1. **DISTINCT 사용**: 조인 후 중복 제거
+2. **GROUP BY 필수**: 집계 함수 사용 시
+3. **날짜 형식**: YYYY-MM-DD (따옴표 포함)
+4. **테이블 전체 경로**: liner-219011.analysis.EVENTS_296805
 
 ## 응답 형식
 
@@ -72,6 +107,7 @@ SELECT ...
             ContextBuildingError: 프롬프트 구성 실패
         """
         try:
+            self._user_query = user_query
             parts = [
                 self.SYSTEM_PROMPT,
                 "\n" + "=" * 80 + "\n",
@@ -94,46 +130,80 @@ SELECT ...
 
     def _build_schema_section(self) -> str:
         """
-        테이블 스키마 섹션 생성
+        테이블 스키마 섹션 (CREATE TABLE 형식 + 역할 태깅)
+
+        각 컬럼의 역할(ENTITY, DIMENSION, TIME, SEMI_STRUCTURED, ATTRIBUTE)과
+        각 테이블의 금지 용도(not_for)를 명시하여 LLM의 오류를 사전에 방지.
 
         Returns:
-            마크다운 형식의 스키마 정보
+            SQL 주석 형식의 스키마 정보
         """
-        parts = ["## BigQuery 테이블 정의\n"]
+        parts = ["/* Given the following BigQuery schema: */\n\n"]
 
         for table_key, table_info in self.schema.items():
-            parts.append(f"\n### {table_key}\n")
-            parts.append(f"**설명**: {table_info['description']}\n")
+            full_name = table_info.get("full_name", table_key)
+            parts.append(f"CREATE TABLE `{full_name}` (\n")
 
-            if "row_count_estimate" in table_info:
-                parts.append(f"**행 수**: {table_info['row_count_estimate']}\n")
-
-            parts.append("\n**컬럼**:\n\n")
-
+            col_lines = []
             for col_name, col_info in table_info["columns"].items():
                 col_type = col_info["type"]
-                nullable = "nullable" if col_info.get("nullable", True) else "NOT NULL"
-                desc = col_info.get("description", "")
+                nullable = "" if col_info.get("nullable", True) else " NOT NULL"
 
-                parts.append(f"- `{col_name}` ({col_type}, {nullable}): {desc}\n")
+                comment_parts = []
+                if "role" in col_info:
+                    comment_parts.append(f"[{col_info['role']}]")
+                comment_parts.append(col_info.get("description", ""))
 
-                if "examples" in col_info:
-                    examples = ", ".join(str(e) for e in col_info["examples"][:3])
-                    parts.append(f"  예: {examples}\n")
+                if "examples" in col_info and col_info["examples"]:
+                    examples = [str(e) for e in col_info["examples"][:3] if e is not None]
+                    if examples:
+                        comment_parts.append(f"예: {', '.join(examples)}")
+
+                comment = " | ".join(comment_parts)
+                col_lines.append(f"  {col_name} {col_type}{nullable},  -- {comment}")
+
+            if col_lines:
+                col_lines[-1] = col_lines[-1].rstrip(",")
+
+            parts.append("\n".join(col_lines))
+            parts.append(f"\n);\n-- {table_info['description']}\n")
+
+            # 금지사항 추가 — LLM이 잘못된 테이블 선택 안 하도록
+            if "not_for" in table_info:
+                parts.append("-- 주의: 다음 용도로는 이 테이블 사용 금지:\n")
+                for item in table_info["not_for"]:
+                    parts.append(f"--   - {item}\n")
+            parts.append("\n")
 
         return "".join(parts)
 
     def _build_success_examples_section(self) -> str:
         """
-        성공한 쿼리 예시 섹션
+        성공한 쿼리 예시 섹션 (의미론적 유사도 기반 동적 선택 - DAIL-SQL 패턴)
 
         Returns:
             마크다운 형식의 쿼리 예시
         """
         parts = ["## 성공한 쿼리 예시\n"]
 
-        for i, (key, info) in enumerate(list(self.success_queries.items())[:3], 1):
-            parts.append(f"\n### 예시 {i}: {info['description']}\n")
+        # 동적 예시 선택 (사용자 쿼리와 의미론적 유사도 기반)
+        user_query = self._user_query if hasattr(self, '_user_query') else ""
+        if not user_query:
+            # fallback: 처음 3개 예시
+            selected = list(self.success_queries.values())[:3]
+        else:
+            try:
+                selector = get_selector()
+                selected = selector.select_examples(user_query, top_k=3)
+            except Exception:
+                # 임베딩 오류 시 fallback
+                selected = list(self.success_queries.values())[:3]
+
+        # 마크다운 생성
+        for i, info in enumerate(selected, 1):
+            similarity = f" (유사도: {info.get('similarity_score', 0):.2f})" \
+                if "similarity_score" in info else ""
+            parts.append(f"\n### 예시 {i}: {info['description']}{similarity}\n")
             parts.append(f"**사용 사례**: {info['use_case']}\n\n")
             parts.append(f"```sql\n{info['sql'].strip()}\n```\n")
 

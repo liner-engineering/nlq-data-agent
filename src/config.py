@@ -19,7 +19,7 @@ class LLMConfig(BaseModel):
     """LLM 설정"""
 
     provider: str = Field(default="litellm", description="LLM 프로바이더")
-    model: str = Field(default="gemini-2.5-flash-lite", description="모델명")
+    model: str = Field(default="gemini-2.5-flash-lite-ai-studio", description="모델명")
     temperature: float = Field(
         default=0.2,
         ge=0.0,
@@ -33,6 +33,7 @@ class LLMConfig(BaseModel):
         description="최대 생성 토큰 수",
     )
     api_key_env: str = Field(default="LITELLM_API_KEY", description="API 키 환경 변수명")
+    base_url_env: str = Field(default="LITELLM_BASE_URL", description="API Base URL 환경 변수명")
 
     @property
     def api_key(self) -> str:
@@ -43,6 +44,11 @@ class LLMConfig(BaseModel):
                 f"API 키를 찾을 수 없습니다. 환경 변수 '{self.api_key_env}'을 설정하세요."
             )
         return key
+
+    @property
+    def api_base(self) -> str | None:
+        """API Base URL 반환 (선택사항)"""
+        return os.getenv(self.base_url_env)
 
 
 class BigQueryConfig(BaseModel):

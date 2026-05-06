@@ -27,6 +27,8 @@ dependencies = [
     "litellm>=1.0.0",
     "tenacity>=8.0.0",
     "streamlit>=1.28.0",
+    "db-dtypes>=1.5.1",
+    "sentence-transformers>=5.4.1",
 ]
 
 [project.optional-dependencies]
