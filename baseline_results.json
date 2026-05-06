@@ -1,0 +1,63 @@
+{
+  "n_cases": 4,
+  "n_attempts_per_case": 3,
+  "total_runs": 12,
+  "overall_pass_at_1": 0.25,
+  "overall_pass_at_k": 0.25,
+  "avg_pass_rate": 0.25,
+  "avg_sql_variants": 1.5,
+  "by_category": {
+    "timeseries": {
+      "n_cases": 2,
+      "pass_at_1": 0.0,
+      "pass_at_k": 0.0,
+      "avg_pass_rate": 0.0,
+      "avg_variants": 2
+    },
+    "subscription": {
+      "n_cases": 2,
+      "pass_at_1": 0.5,
+      "pass_at_k": 0.5,
+      "avg_pass_rate": 0.5,
+      "avg_variants": 1
+    }
+  },
+  "case_details": [
+    {
+      "case_id": "volume_001",
+      "category": "timeseries",
+      "n_match": 0,
+      "n_attempts": 3,
+      "pass_rate": 0.0,
+      "sql_variants": 2,
+      "error_summary": "shape 불일치: gold=(30, 2), pred=(112, 2)"
+    },
+    {
+      "case_id": "volume_002",
+      "category": "timeseries",
+      "n_match": 0,
+      "n_attempts": 3,
+      "pass_rate": 0.0,
+      "sql_variants": 2,
+      "error_summary": "컬럼 0: 1개 셀 수치 불일치"
+    },
+    {
+      "case_id": "sub_001",
+      "category": "subscription",
+      "n_match": 3,
+      "n_attempts": 3,
+      "pass_rate": 1.0,
+      "sql_variants": 1,
+      "error_summary": ""
+    },
+    {
+      "case_id": "sub_002",
+      "category": "subscription",
+      "n_match": 0,
+      "n_attempts": 3,
+      "pass_rate": 0.0,
+      "sql_variants": 1,
+      "error_summary": "컬럼 0: 1개 셀 수치 불일치"
+    }
+  ]
+}

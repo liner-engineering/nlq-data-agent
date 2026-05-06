@@ -44,8 +44,8 @@ except ImportError:
     NLQAgent = Any  # type: ignore
     BigQueryExecutor = Any  # type: ignore
 
-from execution_eval_set import ExecutionEvalCase, get_verified_cases, get_all_cases
-from result_comparator import ComparisonResult, ResultComparator
+from src.execution_eval_set import ExecutionEvalCase, get_verified_cases, get_all_cases
+from src.result_comparator import ComparisonResult, ResultComparator
 
 
 @dataclass

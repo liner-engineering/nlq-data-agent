@@ -89,9 +89,10 @@ SELECT
   COUNT(DISTINCT user_id) AS active_subscribers
 FROM `liner-219011.like.fct_moon_subscription`
 WHERE status = 'active'
+  AND subscription_ended_at IS NULL
         """.strip(),
         category="subscription",
-        notes="활성 구독자 = status='active'. 검증 완료: 현재 17,338명 (활성 비중 11.0% of 총 157K).",
+        notes="활성 구독자 = status='active' AND subscription_ended_at IS NULL. 검증 완료: 17,225명.",
         verified=True,
     ),
     ExecutionEvalCase(
@@ -101,12 +102,12 @@ WHERE status = 'active'
 SELECT
   COUNT(DISTINCT user_id) AS new_subscribers
 FROM `liner-219011.like.fct_moon_subscription`
-WHERE start_date >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
-  AND start_date < DATE_TRUNC(CURRENT_DATE(), MONTH)
+WHERE DATE(subscription_start_at) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
+  AND DATE(subscription_start_at) < DATE_TRUNC(CURRENT_DATE(), MONTH)
         """.strip(),
         category="subscription",
-        notes="지난달 = 전월 1일~말일. 이번달 1일은 제외.",
-        verified=False,
+        notes="지난달 = 전월 1일~말일. 이번달 1일은 제외. 검증 완료: 4,687명.",
+        verified=True,
     ),
 
     # ── 섹터 분류 ────────────────────────────────
@@ -164,32 +165,18 @@ WITH user_events AS (
     AND DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
   GROUP BY user_id
 ),
-user_tiers AS (
-  SELECT
-    user_id,
-    event_count,
-    CASE
-      WHEN event_count >= 50 THEN 'Power User'
-      WHEN event_count >= 20 THEN 'Active User'
-      WHEN event_count >= 5 THEN 'Regular User'
-      ELSE 'Casual User'
-    END AS user_tier
-  FROM user_events
-),
-stats AS (
+total_stats AS (
   SELECT COUNT(DISTINCT user_id) AS total_users FROM user_events
 )
 SELECT
-  'Power User' AS user_tier,
-  COUNT(DISTINCT ut.user_id) AS user_count,
-  ROUND(100.0 * COUNT(DISTINCT ut.user_id) / (SELECT total_users FROM stats), 2) AS percentage
-FROM user_tiers ut
-WHERE ut.user_tier = 'Power User'
-GROUP BY ut.user_tier
+  COUNT(DISTINCT user_id) AS power_user_count,
+  ROUND(100.0 * COUNT(DISTINCT user_id) / (SELECT total_users FROM total_stats), 2) AS percentage
+FROM user_events
+WHERE event_count >= 50
         """.strip(),
         category="power_user",
-        notes="Write 서비스 파워 사용자 (최근 90일, 모든 이벤트). 파워 사용자 정의: 50+ 이벤트. 검증 완료: 23,039명 (47.1% of 49,913 total users). liner_product='write' 필터 필수.",
-        verified=True,
+        notes="Write 서비스 파워 사용자 (최근 90일, 모든 이벤트). 파워 사용자 정의: 50+ 이벤트. liner_product='write' 필터 필수.",
+        verified=False,
     ),
 ]
 

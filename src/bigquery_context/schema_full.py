@@ -161,11 +161,11 @@ WHERE event_type = 'make_chat'
         'date_range': '2023-01-01 ~ present',
         'not_for': [
             '사용자 행동/이벤트 분석 — EVENTS_296805 사용',
-            '메시지 텍스트 분석 — light.fct_question_answer_binding_message 사용',
+            '메시지 텍스트 분석 — like.fct_question_answer_binding_message 사용',
         ],
         'columns': {
             'user_id': {
-                'type': 'STRING',
+                'type': 'INTEGER',
                 'nullable': False,
                 'role': 'ENTITY',
                 'description': '사용자 ID'
@@ -176,31 +176,37 @@ WHERE event_type = 'make_chat'
                 'role': 'ENTITY',
                 'description': '구독 ID (unique)'
             },
-            'start_date': {
-                'type': 'DATE',
-                'nullable': False,
-                'role': 'TIME',
-                'description': '구독 시작 날짜'
-            },
-            'end_date': {
-                'type': 'DATE',
-                'nullable': True,
-                'role': 'TIME',
-                'description': '구독 종료 날짜 (NULL = 현재 구독 중)',
-                'note': 'end_date가 NULL이면 활성 구독자'
-            },
-            'plan_type': {
+            'status': {
                 'type': 'STRING',
                 'nullable': False,
                 'role': 'DIMENSION',
-                'description': '요금제',
-                'examples': ['pro', 'max']
+                'description': '구독 상태',
+                'examples': ['active', 'canceled']
+            },
+            'subscription_start_at': {
+                'type': 'TIMESTAMP',
+                'nullable': False,
+                'role': 'TIME',
+                'description': '구독 시작 시간'
+            },
+            'subscription_ended_at': {
+                'type': 'TIMESTAMP',
+                'nullable': True,
+                'role': 'TIME',
+                'description': '구독 종료 시간 (NULL = 현재 구독 중)',
+                'note': 'subscription_ended_at IS NULL이면 활성 구독자'
+            },
+            'plan_id': {
+                'type': 'STRING',
+                'nullable': False,
+                'role': 'DIMENSION',
+                'description': '요금제 ID'
             }
         },
         'common_queries': [
-            '특정 기간 신규 구독자: WHERE DATE(start_date) BETWEEN ... AND ...',
-            '현재 활성 구독자: WHERE end_date IS NULL',
-            '이벤트와 구독 조인: ON events.user_id = sub.user_id AND DATE(events.event_time) >= sub.start_date'
+            '특정 기간 신규 구독자: WHERE DATE(subscription_start_at) BETWEEN ... AND ...',
+            '현재 활성 구독자: WHERE status = "active" AND subscription_ended_at IS NULL',
+            '이벤트와 구독 조인: ON events.user_id = sub.user_id AND DATE(events.event_time) >= DATE(sub.subscription_start_at)'
         ]
     },
 
