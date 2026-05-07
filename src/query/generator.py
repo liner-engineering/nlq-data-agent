@@ -362,10 +362,10 @@ class SQLGenerator:
                     continue
                 return Result.failure(previous_error)
 
-            # [3] 정적 검증: regex 기반 문법 검증
+            # [3] 정적 검증: regex 기반 문법 검증 + Glossary 린트
             logger.info(f"[{attempt + 1}/{max_attempts}] 정적 검증 중...")
             try:
-                validation_result = validator.validate(sql)
+                validation_result = validator.validate(sql, user_query=user_query)
                 if not validation_result.valid:
                     previous_sql = sql
                     error_text = "; ".join(validation_result.errors)

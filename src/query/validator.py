@@ -10,6 +10,7 @@ from functools import lru_cache
 from typing import Any
 
 from src.bigquery_context import ANTIPATTERNS, BIGQUERY_SCHEMA
+from src.bigquery_context.glossary import GLOSSARY
 from src.exceptions import SQLValidationError
 from src.types import ValidationResult
 
@@ -54,12 +55,13 @@ class SQLValidator:
         self.full_table_names = [t["full_name"] for t in BIGQUERY_SCHEMA.values()]
         self.antipatterns = ANTIPATTERNS
 
-    def validate(self, sql: str) -> ValidationResult:
+    def validate(self, sql: str, user_query: str | None = None) -> ValidationResult:
         """
         SQL 검증
 
         Args:
             sql: 검증할 BigQuery SQL
+            user_query: 사용자 쿼리 (glossary lint용, 선택)
 
         Returns:
             ValidationResult: 검증 결과
@@ -109,6 +111,11 @@ class SQLValidator:
         # 8. 시간 범위 검증
         time_range_warnings = self._validate_time_range(sql)
         warnings.extend(time_range_warnings)
+
+        # 9. Glossary 기반 lint (사용자 쿼리가 있을 때만)
+        if user_query:
+            glossary_errors = self._lint_glossary_violations(sql, user_query)
+            errors.extend(glossary_errors)
 
         # 결과 반환
         is_valid = len(errors) == 0
@@ -314,3 +321,66 @@ class SQLValidator:
                 )
 
         return warnings
+
+    def _lint_glossary_violations(self, sql: str, user_query: str) -> list[str]:
+        """
+        Glossary 기반 lint: 질문의 도메인 용어가 SQL에서 올바르게 처리되었는지 확인
+
+        Args:
+            sql: 검증할 SQL
+            user_query: 사용자 쿼리
+
+        Returns:
+            위반 항목 (에러)
+        """
+        errors: list[str] = []
+        sql_lower = sql.lower()
+        user_query_lower = user_query.lower()
+
+        # 각 glossary 항목을 확인
+        for term, info in GLOSSARY.items():
+            # 용어가 질문에 포함되어 있는가?
+            term_found = False
+
+            # 주 용어
+            if term in user_query_lower:
+                term_found = True
+
+            # 동의어
+            if not term_found and 'alternative_terms' in info:
+                for alt in info['alternative_terms']:
+                    if alt.lower() in user_query_lower:
+                        term_found = True
+                        break
+
+            if not term_found:
+                continue
+
+            # 용어가 질문에 있으면, anti-pattern 확인
+            if 'anti_patterns' in info:
+                for anti_pattern in info['anti_patterns']:
+                    # anti_pattern 문자열을 정규식으로 변환 (간단한 서브스트링 검색)
+                    # 예: "LIKE '%credit%'" → "like '%credit%'"
+                    pattern_to_check = anti_pattern.replace("❌ ", "").lower()
+
+                    # 패턴 검사 (대소문자 무시)
+                    if "like" in pattern_to_check and "%" in pattern_to_check:
+                        # LIKE '%X%' 패턴 검사
+                        like_match = re.search(r"like\s+['\"]%([^'\"]+)%['\"]", sql_lower)
+                        if like_match:
+                            keyword = like_match.group(1)
+                            if keyword in user_query_lower:
+                                errors.append(
+                                    f"[Glossary Violation] '{term}' 질문에서 LIKE '%{keyword}%' 사용 금지. "
+                                    f"올바른 소스: {info.get('primary_source', 'schema 확인')}"
+                                )
+
+                    # 필드명 체크 (예: start_date는 subscription_start_at이어야 함)
+                    elif "field" not in pattern_to_check:
+                        # 직접 문자열 검사
+                        if pattern_to_check in sql_lower:
+                            errors.append(
+                                f"[Glossary Violation] '{term}' 관련 쿼리에서 금지된 패턴 감지: {anti_pattern}"
+                            )
+
+        return errors

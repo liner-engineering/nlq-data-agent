@@ -14,6 +14,7 @@ from src.bigquery_context import (
     SECTORS,
     SUCCESSFUL_QUERIES,
 )
+from src.bigquery_context.glossary import get_glossary_section_for_prompt
 from src.exceptions import ContextBuildingError
 from src.query.example_selector import get_selector
 
@@ -172,6 +173,8 @@ SELECT ...
                 self.SYSTEM_PROMPT,
                 "\n" + "=" * 80 + "\n",
                 self._build_schema_section(),
+                "\n" + "=" * 80 + "\n",
+                get_glossary_section_for_prompt(),
                 "\n" + "=" * 80 + "\n",
                 self._build_success_examples_section(),
                 "\n" + "=" * 80 + "\n",
