@@ -145,6 +145,46 @@ FROM (
 GROUP BY user_tier
 ORDER BY user_count DESC
         """
+    },
+
+    'write_user_credit_usage': {
+        'description': 'Write 서비스 사용자의 credit 사용량 (서비스별 분석)',
+        'use_case': 'Write 유저 중 credit을 가장 많이 사용한 사람',
+        'comment': """
+-- 의사결정 경로:
+-- 1. "write 유저" = liner_product='write' 필터로 정의
+-- 2. "credit 사용" = 이벤트 내용이 아니라 agent_credit_usage_log 테이블 필수
+-- 3. 절대 금지: LIKE '%credit%'로 query 텍스트 검색 (틀린 데이터)
+-- 4. 올바른 패턴: 집합 정의(CTE) → 데이터 테이블 조인 → 집계
+        """,
+        'sql': """
+-- Step 1: Write 유저 집합 정의 (최근 30일)
+WITH write_users AS (
+  SELECT DISTINCT user_id
+  FROM `liner-219011.analysis.EVENTS_296805`
+  WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'write'
+    AND DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+),
+
+-- Step 2: 각 write 유저의 total credit 사용량
+write_user_credit_usage AS (
+  SELECT
+    wu.user_id,
+    COALESCE(SUM(acul.credit_used), 0) AS total_credit_used
+  FROM write_users wu
+  LEFT JOIN `liner-219011.agent_credit_usage_log` acul
+    ON wu.user_id = acul.user_id
+  GROUP BY wu.user_id
+)
+
+-- Step 3: 가장 많이 사용한 유저 (1명)
+SELECT
+  user_id,
+  total_credit_used
+FROM write_user_credit_usage
+ORDER BY total_credit_used DESC
+LIMIT 1
+        """
     }
 }
 
