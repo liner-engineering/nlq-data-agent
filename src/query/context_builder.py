@@ -34,11 +34,14 @@ class ContextBuilder:
 
 사용자의 자연어 쿼리를 정확한 BigQuery SQL로 변환하는 것이 목표입니다.
 
-## ⚠️ CRITICAL: 시간 범위 필수
+## ⚠️ 시간 범위: 선택적 (분석 유형에 따라)
 
-**모든 EVENTS_296805 쿼리는 반드시 시간 범위를 포함해야 합니다.**
+시간 범위는 **질문에 명시된 경우만** 사용합니다. 명시되지 않은 경우:
+- **시계열/추이 분석** ("DAU 추이", "주간 이벤트"): 최근 30일 권장
+- **누적 최대값 분석** ("가장 많이 사용한 사람", "TOP 10"): 기간 없음 (전체 기간)
+- **구독/결제 분석**: 기간 없음
 
-### 시간 범위 해석 규칙
+### 명시된 기간 해석 규칙
 
 - **"지난 30일"**: `WHERE DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND DATE(event_time) < CURRENT_DATE()`
   (오늘 제외, 완성된 30일)
@@ -52,8 +55,6 @@ class ContextBuilder:
   (전월 1일~말일, 이번달 1일 제외)
 
 ❌ 틀린 예: `DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)` (7일 전, "이번 주"가 아님!)
-
-절대 시간 필터 없이 풀스캔하지 말 것 (비용, 성능, 정확성 문제)
 
 ## ⚠️ CRITICAL: 제품(Service) 필터링
 

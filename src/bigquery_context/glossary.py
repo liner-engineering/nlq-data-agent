@@ -20,21 +20,24 @@ GLOSSARY = {
             '구매액: payment_v2_item_purchase (구독과 분리)'
         ],
         'secondary_source': 'EVENTS_296805 (의도/퍼널 보조, 쿼리 내용은 신뢰X)',
+        'time_range': '⚠️ 기간 제한 불가: credit은 누적 지표이므로 기간 없음 권장. 시계열이 필요하면 명시.',
         'anti_patterns': [
             "LIKE '%credit%' in JSON_EXTRACT(event_properties, '$.query')",
             "event_type = 'make_chat' 기반 필터링 (쿼리 텍스트 검색)",
-            "fct_moon_subscription만 사용 (구독≠크레딧 사용)"
+            "fct_moon_subscription만 사용 (구독≠크레딧 사용)",
+            "자동으로 DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) 필터 추가 (원본 데이터 필요)"
         ],
         'routing_rule': """
         credit 질문 →
-          1. "사용량 TOP" → agent_credit_usage_log 직접 조회
-          2. "구매/결제" → payment_v2_item_purchase 조회
-          3. "추이/시계열" → usage_log 또는 payment 시계열
+          1. "사용량 TOP" → agent_credit_usage_log 직접 조회 (기간 없음)
+          2. "구매/결제" → payment_v2_item_purchase 조회 (기간 없음)
+          3. "추이/시계열" → usage_log 또는 payment 시계열 (명시적 기간)
           4. EVENTS는 "어떤 제품을 사용 중인가?"의 보조만
+          5. ⚠️ 기간이 없으면 전체 데이터 사용 (30일 자동 추가 금지!)
         """,
         'example_queries': [
-            '("credit을 가장 많이 사용한 사용자", primary_source),',
-            '("write 유저의 평균 credit 사용량", agent_credit_usage_log)',
+            '("credit을 가장 많이 사용한 사용자", primary_source + 기간없음)',
+            '("write 유저의 평균 credit 사용량", agent_credit_usage_log + 기간없음)',
         ]
     },
 
