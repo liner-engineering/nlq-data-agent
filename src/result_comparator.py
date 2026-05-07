@@ -208,9 +208,9 @@ class ResultComparator:
                         f"컬럼 {col_idx}: {diff_count}개 셀 수치 불일치"
                     )
             else:
-                # 그 외: string으로 normalize 후 비교
-                g_str = g_series.fillna("__NULL__").astype(str)
-                p_str = p_series.fillna("__NULL__").astype(str)
+                # 그 외: string으로 normalize 후 비교 (DATE/DATETIME 타입 안전)
+                g_str = g_series.astype(str).fillna("__NULL__")
+                p_str = p_series.astype(str).fillna("__NULL__")
                 if not (g_str.values == p_str.values).all():
                     diff_count = int((g_str.values != p_str.values).sum())
                     mismatches.append(

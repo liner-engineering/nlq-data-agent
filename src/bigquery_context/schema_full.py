@@ -189,14 +189,15 @@ WHERE event_type = 'make_chat'
                 'type': 'TIMESTAMP',
                 'nullable': False,
                 'role': 'TIME',
-                'description': '구독 시작 시간'
+                'description': '구독 시작 시간 (필터링 시 DATE() 변환 필수)',
+                'note': '날짜 비교: DATE(subscription_start_at)'
             },
             'subscription_ended_at': {
                 'type': 'TIMESTAMP',
                 'nullable': True,
                 'role': 'TIME',
                 'description': '구독 종료 시간 (NULL = 현재 구독 중)',
-                'note': 'subscription_ended_at IS NULL이면 활성 구독자'
+                'note': '활성 구독자 조건: subscription_ended_at IS NULL'
             },
             'plan_id': {
                 'type': 'STRING',

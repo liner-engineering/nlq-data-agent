@@ -37,9 +37,22 @@ class ContextBuilder:
 
 **모든 EVENTS_296805 쿼리는 반드시 시간 범위를 포함해야 합니다.**
 
-- 사용자가 기간을 명시하지 않으면: `WHERE DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)` (최근 30일)
-- 사용자가 기간을 명시하면: `WHERE DATE(event_time) BETWEEN '시작날짜' AND '종료날짜'`
-- 절대 시간 필터 없이 풀스캔하지 말 것 (비용, 성능, 정확성 문제)
+### 시간 범위 해석 규칙
+
+- **"지난 30일"**: `WHERE DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND DATE(event_time) < CURRENT_DATE()`
+  (오늘 제외, 완성된 30일)
+
+- **"이번 주"**: `WHERE DATE(event_time) >= DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY)) AND DATE(event_time) <= CURRENT_DATE()`
+  (월요일부터 오늘까지)
+
+- **"어제"**: `WHERE DATE(event_time) = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)`
+
+- **"지난달"**: `WHERE DATE(event_time) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH) AND DATE(event_time) < DATE_TRUNC(CURRENT_DATE(), MONTH)`
+  (전월 1일~말일, 이번달 1일 제외)
+
+❌ 틀린 예: `DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)` (7일 전, "이번 주"가 아님!)
+
+절대 시간 필터 없이 풀스캔하지 말 것 (비용, 성능, 정확성 문제)
 
 ## ⚠️ CRITICAL: 제품(Service) 필터링
 
@@ -78,7 +91,17 @@ WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'write'        
      AND LOWER(JSON_EXTRACT_SCALAR(event_properties, '$.query')) LIKE '%키워드%'
    ```
 
-3. **사용자 마스터 테이블 조인** (선택):
+3. **구독 데이터 쿼리 패턴**:
+   ```sql
+   -- 활성 구독자 (현재)
+   WHERE status = 'active' AND subscription_ended_at IS NULL
+
+   -- 특정 기간 신규 구독자
+   WHERE DATE(subscription_start_at) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
+     AND DATE(subscription_start_at) < DATE_TRUNC(CURRENT_DATE(), MONTH)
+   ```
+
+4. **사용자 마스터 테이블 조인** (선택):
    ```sql
    FROM `liner-219011.analysis.EVENTS_296805` e
    JOIN `liner-219011.like.dim_user` u ON e.user_id = u.user_id
@@ -90,6 +113,10 @@ WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'write'        
 2. **GROUP BY 필수**: 집계 함수 사용 시
 3. **날짜 형식**: YYYY-MM-DD (따옴표 포함)
 4. **테이블 전체 경로**: liner-219011.analysis.EVENTS_296805
+5. **구독 테이블 필터링**:
+   - 활성 구독자: `WHERE status = 'active' AND subscription_ended_at IS NULL` (두 조건 모두 필수)
+   - 날짜 필터: TIMESTAMP 필드는 DATE() 변환 후 비교 (`DATE(subscription_start_at) >= ...`)
+   - 절대 불필요한 테이블을 JOIN하지 말 것 (구독 테이블만으로 충분)
 
 ## 응답 형식
 
