@@ -63,12 +63,14 @@ BIGQUERY_SCHEMA = {
                     },
                     'liner_product': {
                         'type': 'string',
-                        'description': '사용된 제품',
-                        'examples': ['chat', 'knowledge_base']
+                        'description': '★ 반드시 사용하는 제품 필드 (MANDATORY)',
+                        'examples': ['write', 'researcher', 'ai_search', 'browser_extension'],
+                        'note': '제품 필터링은 항상 이 필드를 사용. "service" 필드는 없음!',
+                        'extraction': 'JSON_EXTRACT_SCALAR(event_properties, "$.liner_product")'
                     }
                 },
                 'extraction_example': 'JSON_EXTRACT_SCALAR(event_properties, "$.query")',
-                'critical_note': 'query 내용으로 사용자 세그멘트 판별 (query LIKE 또는 정규식 사용)'
+                'critical_note': 'query 내용으로 사용자 세그멘트 판별. 제품 필터링은 반드시 liner_product 필드만 사용!'
             },
             'event_time': {
                 'type': 'TIMESTAMP',

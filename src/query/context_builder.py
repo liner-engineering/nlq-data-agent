@@ -41,6 +41,21 @@ class ContextBuilder:
 - 사용자가 기간을 명시하면: `WHERE DATE(event_time) BETWEEN '시작날짜' AND '종료날짜'`
 - 절대 시간 필터 없이 풀스캔하지 말 것 (비용, 성능, 정확성 문제)
 
+## ⚠️ CRITICAL: 제품(Service) 필터링
+
+**사용자가 "Write", "Scholar", "AI Search" 등 제품을 언급하면:**
+
+반드시 `liner_product` 필드를 사용하세요. 다른 필드명은 없습니다!
+
+```sql
+WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'write'        -- Write
+   OR JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'researcher'   -- Scholar
+   OR JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'ai_search'    -- AI Search
+```
+
+❌ 틀린 예: `'$.service'`, `'$.product'` - 이 필드들은 존재하지 않음!
+✓ 올바른 예: `'$.liner_product'` - 반드시 이 필드만 사용
+
 ## ⚠️ CRITICAL: 사용자 세그먼트 분류 방법
 
 **중요**: Liner의 사용자 분류는 "쿼리 내용"으로 한다!
