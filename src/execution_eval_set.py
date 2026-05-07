@@ -51,7 +51,7 @@ EXECUTION_EVAL_CASES: list[ExecutionEvalCase] = [
         gold_sql="""
 SELECT
   DATE(event_time) AS date,
-  COUNT(DISTINCT user_id) AS chat_dau
+  COUNT(DISTINCT user_id) AS dau
 FROM `liner-219011.analysis.EVENTS_296805`
 WHERE event_type = 'make_chat'
   AND DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
@@ -61,8 +61,8 @@ ORDER BY date
         """.strip(),
         category="timeseries",
         order_sensitive=True,
-        notes="Chat DAU = make_chat 이벤트 1회 이상 한 distinct user_id. 기간: 어제부터 과거 30일 (오늘 제외, 데이터 미완성 회피). 검증 완료: 최근 Chat DAU ~8,990명, 범위 5,992~12,473 (사내 정의 일치).",
-        verified=True,
+        notes="DAU = make_chat 이벤트 기반 distinct user_id (쿼리 사용자). 기간: 어제부터 과거 30일 (오늘 제외).",
+        verified=False,
     ),
     ExecutionEvalCase(
         id="volume_002",

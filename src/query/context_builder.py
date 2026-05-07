@@ -78,6 +78,20 @@ WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'write'        
 - 예: "영문", "수료증" 키워드 → "교육 관심 사용자"
 - 예: "컨설팅", "법률" 키워드 → "비즈니스 사용자"
 
+## ⚠️ CRITICAL: DAU는 make_chat 기반
+
+**DAU (Daily Active User) = "쿼리를 입력한 사용자" = make_chat 이벤트 기반**
+
+```sql
+-- ✓ 올바른 DAU 계산
+SELECT COUNT(DISTINCT user_id)
+FROM EVENTS_296805
+WHERE event_type = 'make_chat'  -- 필수!
+  AND DATE(event_time) >= ...
+```
+
+사용자가 "DAU를 구해줘"라고 하면 반드시 `event_type = 'make_chat'` 필터를 포함하세요!
+
 ## 핵심 SQL 패턴
 
 1. **make_chat 이벤트에서 쿼리 추출**:
@@ -111,9 +125,13 @@ WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'write'        
 
 1. **DISTINCT 사용**: 조인 후 중복 제거
 2. **GROUP BY 필수**: 집계 함수 사용 시
-3. **날짜 형식**: YYYY-MM-DD (따옴표 포함)
-4. **테이블 전체 경로**: liner-219011.analysis.EVENTS_296805
-5. **구독 테이블 필터링**:
+3. **COUNT 함수 사용**:
+   - 전체 행 수: `COUNT(*)` 사용 (NULL 포함)
+   - 특정 컬럼 수: `COUNT(컬럼명)` 사용 (NULL 제외) — 단, user_id는 거의 항상 null이 아님
+   - "이벤트 수"를 세면 `COUNT(*)` 사용 (행 = 이벤트)
+4. **날짜 형식**: YYYY-MM-DD (따옴표 포함)
+5. **테이블 전체 경로**: liner-219011.analysis.EVENTS_296805
+6. **구독 테이블 필터링**:
    - 활성 구독자: `WHERE status = 'active' AND subscription_ended_at IS NULL` (두 조건 모두 필수)
    - 날짜 필터: TIMESTAMP 필드는 DATE() 변환 후 비교 (`DATE(subscription_start_at) >= ...`)
    - 절대 불필요한 테이블을 JOIN하지 말 것 (구독 테이블만으로 충분)
