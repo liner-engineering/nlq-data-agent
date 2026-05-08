@@ -98,24 +98,25 @@ GLOSSARY = {
 
     'pro/max 구독자': {
         'alternative_terms': ['프로 유저', '맥스 유저', '유료 구독', '프로/맥스', 'pro user', 'max user', 'pro', 'max'],
-        'description': 'Pro/Max 유료 구독자. plan_id가 \'pro\' 또는 \'max\'인 사용자.',
-        'primary_source': 'like.fct_moon_subscription: plan_id IN (\'pro\', \'max\')',
+        'description': 'Pro/Max 유료 구독자. product_category가 \'pro\' 또는 \'max\'인 사용자.',
+        'primary_source': 'like.fct_moon_subscription: product_category IN (\'pro\', \'max\')',
         'anti_patterns': [
             'liner_product에서 pro/max 찾기 (틀림, liner_product는 제품명)',
-            'plan_id에 \'pro\'/\'max\' 대신 다른 필드 사용',
-            'status만 사용하고 plan_id 조건 누락'
+            'plan_id에 \'pro\'/\'max\' 직접 필터링 (실제 plan_id는 Stripe ID)',
+            'status만 사용하고 product_category 조건 누락'
         ],
         'routing_rule': """
         pro/max 구독자 질문 →
-          WHERE plan_id IN ('pro', 'max')
+          WHERE product_category IN ('pro', 'max')
           + 필요시 구독 기간 조건 (subscription_start_at, subscription_ended_at)
+          + 필요시 파트너 제외: is_from_partnership = FALSE
         """,
         'forbidden_in_columns': [
             {
                 'wrong_column': 'liner_product',
                 'wrong_values': ['pro', 'max', 'Pro', 'Max'],
                 'reason': 'pro/max는 구독 플랜 정보이지, 제품(liner_product)이 아님',
-                'correct': 'fct_moon_subscription.plan_id IN (\'pro\', \'max\')'
+                'correct': 'fct_moon_subscription.product_category IN (\'pro\', \'max\')'
             }
         ]
     },
