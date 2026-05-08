@@ -500,6 +500,17 @@ class SQLGenerator:
         # 검증 에러
         parts.extend([f"문제: {error}", ""])
 
+        # 타입 불일치 에러
+        if "No matching signature for operator" in error or "INT64, STRING" in error or "uncomparable types" in error:
+            parts.extend([
+                "**타입 불일치 해결 방법:**",
+                "EVENTS_296805.user_id는 STRING, fct_moon_subscription.user_id는 INTEGER입니다!",
+                "1. JOIN 조건: CAST(events.user_id AS INT64) = sub.user_id",
+                "2. IN 서브쿼리: WHERE CAST(user_id AS INT64) IN (SELECT user_id FROM ...)",
+                "3. 예시: WHERE CAST(user_id AS INT64) IN (SELECT user_id FROM fct_moon_subscription WHERE ...)",
+                "",
+            ])
+
         # 비용 초과 에러 — 구체적 가이드
         if "bytes billed" in error.lower() or "1TB" in error or "데이터" in error.lower():
             parts.extend([

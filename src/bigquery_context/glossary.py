@@ -9,6 +9,19 @@
 2. secondary_source: 보조 지표 (선택)
 3. anti_patterns: 절대 금지 SQL 패턴 (규칙 기반 lint)
 4. routing_rule: LLM이 따를 의사결정 경로
+
+⚠️ CRITICAL: 스키마 타입 주의!
+테이블마다 user_id 타입이 다르므로 조인 시 CAST 필수:
+- EVENTS_296805.user_id = STRING (⚠️)
+- fct_moon_subscription.user_id = INTEGER
+- agent_credit_usage_log.user_id = INTEGER
+
+타입 불일치 에러: "No matching signature for operator =" 발생 시
+→ CAST(events.user_id AS INT64) = subscription.user_id 사용
+
+올바른 패턴:
+- JOIN: ON CAST(e.user_id AS INT64) = s.user_id
+- IN: WHERE CAST(e.user_id AS INT64) IN (SELECT user_id FROM ...)
 """
 
 GLOSSARY = {
@@ -16,8 +29,8 @@ GLOSSARY = {
         'alternative_terms': ['크레딧', '사용량', '구매', 'usage'],
         'description': '크레딧: Write/Research 서비스에서 사용자가 소비하는 단위. 사용(usage)은 agent_credit_usage_log에서 delta_amount < 0으로 추적.',
         'primary_source': [
-            '사용량: cdc_service_db_new_liner.agent_credit_usage_log (delta_amount < 0)',
-            '제품 필터: EVENTS_296805에서 make_chat + liner_product로 제품별 사용자 정의'
+            '사용량: cdc_service_db_new_liner.agent_credit_usage_log (delta_amount < 0, user_id는 INTEGER)',
+            '제품 필터: EVENTS_296805에서 make_chat + liner_product로 제품별 사용자 정의 (user_id는 STRING → 타입 캐스팅 필수!)'
         ],
         'secondary_source': 'agent_credit_item (상세 항목 정보, 필요시)',
         'time_range': '⚠️ 기간 제한 불가: credit은 누적 지표이므로 기간 없음 권장. 시계열이 필요하면 명시.',
@@ -25,7 +38,8 @@ GLOSSARY = {
             "LIKE '%credit%' in JSON_EXTRACT(event_properties, '$.query')",
             "event_type = 'complete_use_credit' 사용 (EVENTS의 크레딧 이벤트는 신뢰X)",
             "agent_credit_usage_log만 사용해서 제품 정보 손실 (EVENTS 조인 필요)",
-            "자동으로 DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) 필터 추가 (누적 지표는 전체 기간)"
+            "자동으로 DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) 필터 추가 (누적 지표는 전체 기간)",
+            "EVENTS_296805 (STRING user_id)과 agent_credit_usage_log (INTEGER user_id) 조인 시 CAST 누락 → 타입 오류"
         ],
         'routing_rule': """
         credit 질문 →
