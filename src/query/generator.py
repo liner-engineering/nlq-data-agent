@@ -504,7 +504,13 @@ class SQLGenerator:
             parts.append("**아래 도메인 용어 매핑을 정확히 따르세요:**")
             parts.append("")
             for g in relevant_glossary:
-                parts.append(f"- **{g['term']}**: {g['primary_source']}")
+                primary_source = g["primary_source"]
+                if isinstance(primary_source, list):
+                    parts.append(f"- **{g['term']}**:")
+                    for source in primary_source:
+                        parts.append(f"  - {source}")
+                else:
+                    parts.append(f"- **{g['term']}**: {primary_source}")
                 for ap in g["anti_patterns"][:2]:  # 토큰 폭발 방지
                     parts.append(f"  - 금지: {ap}")
             parts.append("")
