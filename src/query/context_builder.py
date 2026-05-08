@@ -84,24 +84,33 @@ WHERE '$.product' = 'scholar'  -- 필드 없음!
 - "Scholar pro 유저" = 둘 다 조건 필요 (두 테이블 조인 또는 IN 서브쿼리)
 
 **⚠️ 타입 변환 필수: 테이블 조인 시 user_id 타입 일치**:
-- EVENTS_296805의 user_id = INTEGER
-- fct_moon_subscription의 user_id = STRING
-- agent_credit_usage_log의 user_id = INTEGER
+- EVENTS_296805.user_id = **STRING** (⚠️ 주의!)
+- fct_moon_subscription.user_id = **INTEGER**
+- agent_credit_usage_log.user_id = **INTEGER**
 
 ```sql
--- ✓ 올바른 방법: SAFE_CAST로 타입 맞추기
+-- ✓ 올바른 방법 1: EVENTS_296805 + fct_moon_subscription 조인
 FROM `liner-219011.analysis.EVENTS_296805` e
-WHERE SAFE_CAST(e.user_id AS INT64) IN (
-  SELECT SAFE_CAST(user_id AS INT64)
-  FROM `liner-219011.like.fct_moon_subscription`
-  WHERE plan_id IN ('pro', 'max')
+INNER JOIN `liner-219011.like.fct_moon_subscription` s
+  ON CAST(e.user_id AS INT64) = s.user_id  -- STRING을 INT64로 캐스팅!
+  AND s.product_category IN ('pro', 'max')
+
+-- ✓ 올바른 방법 2: EVENTS_296805 + agent_credit_usage_log
+FROM `liner-219011.analysis.EVENTS_296805` e
+INNER JOIN `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acu
+  ON CAST(e.user_id AS INT64) = acu.user_id  -- STRING을 INT64로 캐스팅!
+
+-- ❌ 틀린 예: 타입 캐스팅 없음 → "No matching signature for operator ="
+FROM EVENTS_296805 e
+WHERE e.user_id IN (
+  SELECT user_id FROM fct_moon_subscription  -- STRING IN INTEGER 타입 오류!
 )
 
--- 또는 JOIN 사용 (권장)
-FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acu
-JOIN `liner-219011.like.fct_moon_subscription` s
-  ON CAST(acu.user_id AS STRING) = s.user_id  -- user_id 타입 일치
-  AND plan_id IN ('pro', 'max')
+-- ✓ 올바른 IN 서브쿼리 (CAST 필수)
+FROM EVENTS_296805 e
+WHERE CAST(e.user_id AS INT64) IN (
+  SELECT user_id FROM fct_moon_subscription WHERE product_category IN ('pro', 'max')
+)
 ```
 
 ## ⚠️ CRITICAL: 사용자 세그먼트 분류 방법
