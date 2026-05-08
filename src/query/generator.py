@@ -18,6 +18,7 @@ from typing import Any
 
 from openai import OpenAI
 
+from src.bigquery_context.glossary import GLOSSARY
 from src.config import LLMConfig
 from src.exceptions import SQLGenerationError
 from src.logging_config import ContextualLogger
@@ -449,6 +450,73 @@ class SQLGenerator:
             f"최대 재시도 횟수({max_attempts}) 초과: {previous_error or '원인 미상'}"
         )
 
+    def _build_correction_feedback(
+        self,
+        user_query: str,
+        failed_sql: str,
+        error: str,
+    ) -> str:
+        """
+        검증 실패 시 LLM에게 줄 피드백.
+
+        Glossary 위반이 있으면 정답(primary_source)까지 함께 전달하여
+        LLM이 같은 실수를 반복하지 않도록 합니다.
+
+        Args:
+            user_query: 사용자의 원본 쿼리
+            failed_sql: 검증에 실패한 SQL (있으면)
+            error: 검증 에러 메시지
+
+        Returns:
+            LLM에게 전달할 피드백 텍스트
+        """
+        user_query_lower = user_query.lower()
+
+        # 질문과 매칭되는 glossary 항목 수집
+        relevant_glossary = []
+        for term, info in GLOSSARY.items():
+            all_terms = [term] + info.get("alternative_terms", [])
+            if any(t.lower() in user_query_lower for t in all_terms):
+                relevant_glossary.append({
+                    "term": term,
+                    "primary_source": info.get("primary_source", ""),
+                    "anti_patterns": info.get("anti_patterns", []),
+                })
+
+        # 피드백 메시지 조립
+        parts = [user_query, "", "[이전 시도 실패]", ""]
+
+        # 이전 SQL (있으면)
+        if failed_sql:
+            parts.extend([
+                "이전 SQL:",
+                "```sql",
+                failed_sql,
+                "```",
+                "",
+            ])
+
+        # 검증 에러
+        parts.extend([f"문제: {error}", ""])
+
+        # Glossary 정보 (있으면)
+        if relevant_glossary:
+            parts.append("**아래 도메인 용어 매핑을 정확히 따르세요:**")
+            parts.append("")
+            for g in relevant_glossary:
+                parts.append(f"- **{g['term']}**: {g['primary_source']}")
+                for ap in g["anti_patterns"][:2]:  # 토큰 폭발 방지
+                    parts.append(f"  - 금지: {ap}")
+            parts.append("")
+
+        # 마무리
+        parts.append(
+            "위 매핑을 정확히 따라 새로운 SQL을 생성하세요. "
+            "동일한 실수 반복 금지."
+        )
+
+        return "\n".join(parts)
+
     def generate_with_validation(
         self,
         user_query: str,
@@ -487,11 +555,10 @@ class SQLGenerator:
             if attempt == 0:
                 current_query = user_query
             else:
-                current_query = (
-                    f"{user_query}\n\n"
-                    f"[이전 시도 실패]\n"
-                    f"문제: {last_error}\n\n"
-                    f"위 문제를 해결한 새로운 SQL을 생성하세요."
+                current_query = self._build_correction_feedback(
+                    user_query=user_query,
+                    failed_sql=last_sql or "",
+                    error=last_error or "",
                 )
 
             logger.info(f"[시도 {attempt + 1}/{max_retries}] SQL 생성 중...")
