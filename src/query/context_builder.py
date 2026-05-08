@@ -110,10 +110,32 @@ FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log`
 WHERE delta_amount < 0  -- 음수만 = 사용량
 ```
 
-**Credit 관련 질문 처리:**
-1. 제품별 사용자 필터링: EVENTS_296805 + liner_product로 사용자 집합 정의
-2. Credit 조회: agent_credit_usage_log에서 해당 사용자의 delta_amount < 0 합산
-3. 조인: INNER JOIN 또는 WHERE 조건으로 연결 (WHERE IN 금지, BigQuery 제한 초과 위험)
+**Credit 관련 질문 처리 (매우 중요!)**:
+
+예시: "Scholar 사용자들이 credit을 얼마나 사용했는지?"
+
+```sql
+-- ✓ 올바른 방법: agent_credit_usage_log 직접 조회 (가장 간단, 가장 빠름)
+SELECT
+  user_id,
+  SUM(ABS(delta_amount)) AS total_credit_used,
+  COUNT(*) AS usage_count,
+  MIN(used_at) AS first_usage,
+  MAX(used_at) AS last_usage
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log`
+WHERE delta_amount < 0  -- ★ 사용량만 조회 (음수)
+  AND service = 'scholar'  -- ★ 서비스 필터
+GROUP BY user_id
+HAVING total_credit_used > 0
+ORDER BY total_credit_used DESC
+```
+
+**핵심 포인트**:
+1. agent_credit_usage_log는 credit 데이터의 원천 (가장 정확함)
+2. delta_amount < 0 필터는 필수 (음수 = 사용, 양수 = 충전)
+3. SUM(ABS(delta_amount))로 사용량 합계 (음수 부호 제거)
+4. service = 'scholar' 또는 'write' 등으로 제품 필터링
+5. EVENTS_296805는 불필요 (credit은 agent_credit_usage_log에만 있음)
 
 ## 핵심 SQL 패턴
 

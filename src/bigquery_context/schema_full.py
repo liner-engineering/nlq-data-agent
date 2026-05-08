@@ -265,8 +265,8 @@ BIGQUERY_SCHEMA = {
 
     'cdc_service_db_new_liner.agent_credit_usage_log': {
         'full_name': 'liner-219011.cdc_service_db_new_liner.agent_credit_usage_log',
-        'description': 'AI Agent Credit 사용 로그',
-        'row_count_estimate': '~500K 이상',
+        'description': 'AI Agent Credit 사용 로그 (Scholar, Write 등)',
+        'row_count_estimate': '~50M 이상',
         'update_frequency': 'Real-time',
         'date_range': '2024년부터 present',
         'not_for': [
@@ -274,65 +274,101 @@ BIGQUERY_SCHEMA = {
             '구독자 분석 — like.fct_moon_subscription 사용',
         ],
         'columns': {
+            'id': {
+                'type': 'INTEGER',
+                'nullable': False,
+                'role': 'ENTITY',
+                'description': 'Primary key',
+            },
             'user_id': {
                 'type': 'INTEGER',
                 'nullable': False,
                 'role': 'ENTITY',
-                'description': '사용자 ID',
+                'description': '사용자 ID (like.dim_user와 조인 가능)',
+            },
+            'team_id': {
+                'type': 'INTEGER',
+                'nullable': True,
+                'role': 'ENTITY',
+                'description': '팀/조직 ID',
+            },
+            'credit_item_id': {
+                'type': 'INTEGER',
+                'nullable': True,
+                'role': 'ENTITY',
+                'description': '크레딧 아이템 ID',
             },
             'delta_amount': {
-                'type': 'FLOAT64',
+                'type': 'INTEGER',
                 'nullable': False,
                 'role': 'MEASURE',
                 'description': '크레딧 변화량 (음수 = 사용, 양수 = 충전)',
-                'note': '★ 사용량 조회 시 delta_amount < 0 필터 필수',
+                'note': '★ 사용량 조회 시 delta_amount < 0 필터 필수. SUM(ABS(delta_amount))으로 합산',
                 'examples': [-100, -50, 1000],
-            },
-            'used_at': {
-                'type': 'TIMESTAMP',
-                'nullable': False,
-                'role': 'TIME',
-                'description': '사용/충전 시간 (UTC)',
-            },
-            'service': {
-                'type': 'STRING',
-                'nullable': True,
-                'role': 'ATTRIBUTE',
-                'description': '서비스명 (write, scholar, ai_search 등)',
-                'examples': ['write', 'scholar', 'ai_search'],
-            },
-            'model': {
-                'type': 'STRING',
-                'nullable': True,
-                'role': 'ATTRIBUTE',
-                'description': '사용된 AI 모델',
-                'examples': ['gpt-4', 'claude-3', 'gemini'],
             },
             'reason': {
                 'type': 'STRING',
                 'nullable': True,
                 'role': 'ATTRIBUTE',
-                'description': '크레딧 변화 사유',
-                'examples': ['usage', 'refund', 'charge', 'promo'],
+                'description': '크레딧 변화 사유 (api_call, model_usage 등)',
+                'examples': ['api_call', 'model_usage', 'refund'],
+            },
+            'agent_name': {
+                'type': 'STRING',
+                'nullable': True,
+                'role': 'ATTRIBUTE',
+                'description': 'AI 에이전트/모델명 (gpt-4, claude-3, gemini 등)',
+                'examples': ['gpt-4', 'claude-3', 'gemini'],
+            },
+            'resource_id': {
+                'type': 'STRING',
+                'nullable': True,
+                'role': 'ATTRIBUTE',
+                'description': '리소스 ID',
+            },
+            'cost_metadata': {
+                'type': 'STRING',
+                'nullable': True,
+                'role': 'SEMI_STRUCTURED',
+                'description': '비용 메타데이터 (JSON 형식)',
+            },
+            'created_at': {
+                'type': 'TIMESTAMP',
+                'nullable': False,
+                'role': 'TIME',
+                'description': '기록 생성 시간 (UTC) — 모든 시간 필터링은 이 컬럼 사용',
+            },
+            'datastream_metadata': {
+                'type': 'RECORD',
+                'nullable': True,
+                'role': 'SEMI_STRUCTURED',
+                'description': 'Datastream 메타데이터',
             }
         },
         'critical_pattern': {
             'description': '사용자별 credit 사용량 조회',
             'method': '''
+★ 중요: agent_credit_usage_log는 모든 credit 변화를 기록합니다.
 사용자의 credit 사용량을 집계할 때:
-1. delta_amount < 0으로 필터링 (사용 기록만)
-2. SUM(ABS(delta_amount))으로 사용량 합계
-3. 사용자별 또는 서비스별로 그룹화
+
+1. delta_amount < 0으로 필터링 (사용 기록만, 음수 = 사용)
+2. SUM(ABS(delta_amount))으로 사용량 합계 (절대값으로 양수 반환)
+3. 기간 필터: DATE(created_at) >= '...' 를 항상 추가 (비용 절감)
+4. 사용자별 또는 agent_name별로 그룹화
 
 예시:
 SELECT
   user_id,
   SUM(ABS(delta_amount)) AS total_credit_used,
-  COUNT(*) AS usage_count
+  COUNT(*) AS usage_count,
+  MIN(created_at) AS first_usage,
+  MAX(created_at) AS last_usage
 FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log`
-WHERE delta_amount < 0
+WHERE delta_amount < 0  -- 사용 기록만
+  AND DATE(created_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)  -- 기간 필터
 GROUP BY user_id
 ORDER BY total_credit_used DESC
+LIMIT 100
             '''
         }
     }

@@ -55,28 +55,24 @@ ORDER BY user_count DESC
     },
 
     'scholar_user_credit_by_plan': {
-        'description': 'Scholar 사용자의 플랜별 credit 사용량 분석',
-        'use_case': 'Scholar free/pro/max 유저별로 credit을 얼마나 사용했는지 조회',
+        'description': '사용자별 credit 사용량 분석',
+        'use_case': '각 사용자가 얼마나 많은 credit을 사용했는지 agent 유형별로 조회',
         'sql': """
--- Scholar 사용자의 subscription 플랜 정보와 credit 사용량 조인
 SELECT
-  du.user_id,
-  s.plan_id AS scholar_plan,
-  COUNT(DISTINCT DATE(acul.used_at)) AS usage_days,
+  user_id,
+  agent_name,
+  SUM(ABS(delta_amount)) AS total_credit_used,
   COUNT(*) AS usage_count,
-  SUM(ABS(acul.delta_amount)) AS total_credit_used,
-  ROUND(AVG(ABS(acul.delta_amount)), 2) AS avg_credit_per_use
-FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acul
-INNER JOIN `liner-219011.like.dim_user` du
-  ON acul.user_id = du.user_id
-LEFT JOIN `liner-219011.like.fct_moon_subscription` s
-  ON du.user_id = s.user_id
-  AND DATE(acul.used_at) >= DATE(s.subscription_start_at)
-  AND (s.subscription_ended_at IS NULL OR DATE(acul.used_at) <= DATE(s.subscription_ended_at))
-WHERE acul.delta_amount < 0  -- 사용 기록만 (충전은 제외)
-  AND acul.service = 'scholar'  -- Scholar 서비스만
-GROUP BY user_id, scholar_plan
+  COUNT(DISTINCT DATE(created_at)) AS usage_days,
+  ROUND(AVG(ABS(delta_amount)), 2) AS avg_credit_per_use,
+  MIN(created_at) AS first_usage,
+  MAX(created_at) AS last_usage
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log`
+WHERE delta_amount < 0  -- 사용 기록만
+  AND DATE(created_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)  -- 기간 필터
+GROUP BY user_id, agent_name
 ORDER BY total_credit_used DESC
+LIMIT 100
         """
     },
 
