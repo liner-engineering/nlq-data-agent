@@ -14,6 +14,7 @@ from src.exceptions import NLQAgentException, SQLGenerationError
 from src.logging_config import ContextualLogger, PerformanceLogger, setup_logging
 from src.query.context_builder import ContextBuilder
 from src.query.generator import SQLGenerator
+from src.query.intent_classifier import IntentClassifier, QueryIntent
 from src.query.validator import SQLValidator
 from src.types import AnalysisResult, SQL
 
@@ -62,6 +63,7 @@ class NLQAgent:
         logger.info(f"로그 파일: {self.config.logging.file_path or '(콘솔만)'}")
 
         # 모듈 초기화
+        self.intent_classifier = IntentClassifier(self.config.llm)
         self.validator = SQLValidator()
         self.context_builder = ContextBuilder()
         self.generator = SQLGenerator(self.config.llm)
@@ -123,6 +125,70 @@ class NLQAgent:
         """
         logger.set_context(user_query=user_query[:100])
 
+        try:
+            # 0단계: 의도 분류 (게이트키퍼)
+            logger.info("Step 0: 질문 의도 분류 (게이트키퍼)")
+            intent, message = self.intent_classifier.classify(user_query)
+
+            if intent == QueryIntent.DATA_QUESTION:
+                return self._analyze_data_question(user_query, skip_cost_check)
+
+            elif intent == QueryIntent.META_QUESTION:
+                explanation = self._answer_meta_question()
+                logger.info(f"메타 질문 응답: {explanation[:100]}")
+                return AnalysisResult(
+                    query=user_query, sql="", data=None, stats={},
+                    explanation=explanation,
+                    success=True, error=None,
+                    data_quality={}, sample_warning="",
+                )
+
+            elif intent == QueryIntent.OUT_OF_SCOPE:
+                explanation = message or (
+                    "이 시스템은 Liner의 사용자 행동·구독·쿼리 데이터에 대한 "
+                    "분석 질문에 답합니다.\n\n"
+                    "예시:\n"
+                    "- 지난 30일 일별 DAU 추이\n"
+                    "- 섹터별 구독 전환율\n"
+                    "- 이력서 관련 사용자의 D+7 리텐션"
+                )
+                logger.info(f"범위 밖 질문: {user_query[:50]}")
+                return AnalysisResult(
+                    query=user_query, sql="", data=None, stats={},
+                    explanation=explanation,
+                    success=True, error=None,
+                    data_quality={}, sample_warning="",
+                )
+
+            elif intent == QueryIntent.AMBIGUOUS:
+                explanation = message or (
+                    "질문을 좀 더 구체적으로 말씀해주세요.\n\n"
+                    "예: '전환율'보다는 '지난 30일 make_chat 사용자의 구독 전환율'"
+                )
+                logger.info(f"모호한 질문: {user_query[:50]}")
+                return AnalysisResult(
+                    query=user_query, sql="", data=None, stats={},
+                    explanation=explanation,
+                    success=True, error=None,
+                    data_quality={}, sample_warning="",
+                )
+
+        except Exception as e:
+            logger.exception(f"의도 분류 중 예상치 못한 오류: {str(e)}")
+            # 분류 실패 시 보수적으로 데이터 분석 진행
+            return self._analyze_data_question(user_query, skip_cost_check)
+
+    def _analyze_data_question(self, user_query: str, skip_cost_check: bool = False) -> AnalysisResult:
+        """
+        데이터 분석 질문 처리
+
+        Args:
+            user_query: 사용자의 자연어 쿼리
+            skip_cost_check: 비용 체크 건너뛸 여부
+
+        Returns:
+            AnalysisResult: 분석 결과
+        """
         try:
             # 1. SQL 생성 + 검증 + 비용 확인 (self-correction 루프)
             logger.info("Step 1: SQL 생성 및 검증 중 (self-correction 루프)")
@@ -205,7 +271,7 @@ class NLQAgent:
             )
 
         except NLQAgentException as e:
-            logger.error(f"분석 실패: {e}")
+            logger.error(f"데이터 분석 실패: {e}")
             return AnalysisResult(
                 query=user_query,
                 sql="",
@@ -219,7 +285,7 @@ class NLQAgent:
             )
 
         except Exception as e:
-            logger.exception(f"예상치 못한 오류: {str(e)}")
+            logger.exception(f"데이터 분석 중 예상치 못한 오류: {str(e)}")
             return AnalysisResult(
                 query=user_query,
                 sql="",
@@ -231,6 +297,17 @@ class NLQAgent:
                 data_quality={},
                 sample_warning="",
             )
+
+    def _answer_meta_question(self) -> str:
+        """시스템에 대한 메타 질문에 답하기"""
+        return (
+            "저는 Liner의 BigQuery 데이터 분석 어시스턴트입니다.\n\n"
+            "활용 가능한 데이터:\n"
+            "- EVENTS_296805: Amplitude 이벤트 (make_chat, view_pricing 등)\n"
+            "- fct_moon_subscription: 구독 정보\n"
+            "- fct_question_answer_binding_message: 메시지 카테고리\n\n"
+            "분석 질문을 자연어로 입력하시면 SQL을 생성·실행해드립니다."
+        )
 
 
 # CLI 진입점
