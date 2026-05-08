@@ -229,26 +229,9 @@ class NLQAgent:
                 logger.warning(f"SQL 설명 생성 실패: {e}")
                 sql_explanation = ""
 
-            # 2. 비용 정보 조회 (이미 검증했지만 정보만 다시 수집)
-            logger.info("Step 2: 최종 비용 확인")
-            with perf.timer("cost_estimation"):
-                cost_result = self.bq_executor.dry_run(sql)
-
-            if not cost_result.is_success():
-                logger.warning(f"비용 추정 실패: {cost_result.error}")
-                cost_estimate = {}
-                cost_status, cost_message = "unknown", "비용 추정 실패"
-            else:
-                cost_estimate = cost_result.data
-                # dry-run에서는 bytes_billed가 0일 수 있으므로 bytes_processed 사용
-                bytes_billed = cost_estimate.get("bytes_billed", 0)
-                if bytes_billed == 0:
-                    bytes_billed = cost_estimate.get("bytes_processed", 0)
-                cost_status, cost_message = self._estimate_cost(bytes_billed)
-                logger.info(
-                    f"비용 추정: {bytes_billed / (1024**3):.2f}GB, "
-                    f"status={cost_status}"
-                )
+            # 2. 비용 정보 조회 스킵 (BigQuery 비용은 GCP에서 관리)
+            cost_estimate = {}
+            cost_status, cost_message = "", ""
 
             # 3. BigQuery 실행
             logger.info("Step 3: BigQuery 실행 중")

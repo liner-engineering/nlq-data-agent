@@ -56,20 +56,32 @@ class ContextBuilder:
 
 ❌ 틀린 예: `DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)` (7일 전, "이번 주"가 아님!)
 
-## ⚠️ CRITICAL: 제품(Service) 필터링
+## ⚠️ CRITICAL: 제품(Product) 필터링 — 정확한 매핑 필수
 
-**사용자가 "Write", "Scholar", "AI Search" 등 제품을 언급하면:**
+**제품명 → liner_product 매핑 (매우 중요!)**:
 
-반드시 `liner_product` 필드를 사용하세요. 다른 필드명은 없습니다!
+| 사용자가 말한 제품 | liner_product 값 | 설명 |
+|---|---|---|
+| "Scholar" | `'researcher'` | Scholar 제품 (Scholar Free/Pro/Max 모두 포함) |
+| "Write" | `'write'` | Write 제품 |
+| "AI Search" | `'ai_search'` | AI Search 제품 |
 
 ```sql
-WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'write'        -- Write
-   OR JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'researcher'   -- Scholar
-   OR JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'ai_search'    -- AI Search
+-- ✓ 올바른 예: Scholar 사용자 필터링
+WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'researcher'
+
+-- ✓ 올바른 예: Write 사용자 필터링
+WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'write'
+
+-- ❌ 틀린 예: 이런 필드명은 없음
+WHERE '$.service' = 'scholar'  -- 필드 없음!
+WHERE '$.product' = 'scholar'  -- 필드 없음!
 ```
 
-❌ 틀린 예: `'$.service'`, `'$.product'` - 이 필드들은 존재하지 않음!
-✓ 올바른 예: `'$.liner_product'` - 반드시 이 필드만 사용
+**중요: 구독 플랜 (pro/max) vs 제품 (Scholar/Write) 혼동하지 말 것**:
+- "Scholar 유저" = `liner_product = 'researcher'` (EVENTS_296805)
+- "Pro 구독자" = `plan_id = 'pro'` (fct_moon_subscription)
+- "Scholar pro 유저" = 둘 다 조건 필요 (두 테이블 조인 또는 IN 서브쿼리)
 
 ## ⚠️ CRITICAL: 사용자 세그먼트 분류 방법
 

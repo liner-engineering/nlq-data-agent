@@ -124,21 +124,9 @@ def display_llm_cost_statistics():
 
 
 def display_cost_info(result):
-    """비용 정보 표시"""
-    cost_status = getattr(result, 'cost_status', 'unknown')
-    cost_message = getattr(result, 'cost_message', '')
-    cost_estimate = getattr(result, 'cost_estimate', {})
-
-    if cost_estimate and 'bytes_billed' in cost_estimate:
-        gb_billed = cost_estimate['bytes_billed'] / (1024 ** 3)
-        st.markdown(f"**예상 비용**: {gb_billed:.2f} GB (약 ${gb_billed * 6.5 / 1000:.2f})")
-
-    if cost_status == "warning":
-        st.warning(cost_message)
-    elif cost_status == "alert":
-        st.warning(cost_message)
-    elif cost_status == "blocked":
-        st.error(cost_message)
+    """비용 정보 표시 (BigQuery 비용은 GCP Console에서 확인)"""
+    # BigQuery 비용 계산 제거 (GCP에서 관리)
+    pass
 
 
 def display_results(result):
@@ -344,25 +332,8 @@ def main():
                             estimated_output_tokens = len(sql) // 4  # SQL 출력 추정
                             _add_llm_cost("gemini-2.5-flash-lite", estimated_input_tokens, estimated_output_tokens)
 
-                            # BigQuery 비용 확인
-                            cost_result = agent.bq_executor.dry_run(sql)
-                            if cost_result.is_success():
-                                cost_estimate = cost_result.data
-                                # dry-run에서는 bytes_billed가 0일 수 있으므로 bytes_processed 사용
-                                bytes_billed = cost_estimate.get("bytes_billed", 0)
-                                if bytes_billed == 0:
-                                    bytes_billed = cost_estimate.get("bytes_processed", 0)
-                                cost_status, cost_message = agent._estimate_cost(bytes_billed)
-                            else:
-                                cost_estimate = {}
-                                cost_status = "unknown"
-                                cost_message = "비용 확인 실패"
-
                             st.session_state.pending_sql = sql
                             st.session_state.pending_query = query_stripped
-                            st.session_state.cost_estimate = cost_estimate
-                            st.session_state.cost_status = cost_status
-                            st.session_state.cost_message = cost_message
                             st.success("SQL 생성 및 검증 완료!")
                         else:
                             st.error(f"SQL 생성 실패: {sql_result.error}")
@@ -376,32 +347,10 @@ def main():
             st.subheader("생성된 SQL (검토 후 실행하세요)")
             st.code(st.session_state.pending_sql, language="sql")
 
-            # 비용 정보 표시
-            cost_status = st.session_state.get("cost_status", "unknown")
-            cost_message = st.session_state.get("cost_message", "")
-            cost_estimate = st.session_state.get("cost_estimate", {})
-
-            if cost_estimate:
-                bytes_for_display = cost_estimate.get("bytes_billed", 0)
-                if bytes_for_display == 0:
-                    bytes_for_display = cost_estimate.get("bytes_processed", 0)
-                if bytes_for_display > 0:
-                    gb_billed = bytes_for_display / (1024 ** 3)
-                    st.info(f"📊 BigQuery 스캔: {gb_billed:.2f} GB\n*(실제 청구는 Google Cloud Console에서 확인하세요)*")
-
-            if cost_status == "warning" or cost_status == "alert":
-                st.warning(cost_message)
-            elif cost_status == "blocked":
-                st.error(cost_message)
-
             # 실행 버튼
             col1, col2, col3 = st.columns([1, 1, 3])
             with col1:
-                if cost_status == "blocked":
-                    st.button("실행", disabled=True, key="nlq_execute_disabled")
-                    st.caption("비용이 너무 크므로 실행할 수 없습니다")
-                else:
-                    confirm_execute = st.button("실행", type="primary", key="nlq_execute")
+                confirm_execute = st.button("실행", type="primary", key="nlq_execute")
                     if confirm_execute:
                         try:
                             with st.spinner("쿼리 실행 중..."):
