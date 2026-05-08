@@ -351,58 +351,59 @@ def main():
             col1, col2, col3 = st.columns([1, 1, 3])
             with col1:
                 confirm_execute = st.button("실행", type="primary", key="nlq_execute")
-                    if confirm_execute:
-                        try:
-                            with st.spinner("쿼리 실행 중..."):
-                                agent = get_agent()
-                                from src.executor.bigquery_client import BigQueryExecutor
-                                from src.executor.data_processor import DataProcessor
 
-                                # BigQuery 실행
-                                bq_executor = BigQueryExecutor(agent.config.bigquery)
-                                exec_result = bq_executor.execute(
-                                    st.session_state.pending_sql,
-                                    max_results=agent.config.bigquery.max_results
+            if confirm_execute:
+                try:
+                    with st.spinner("쿼리 실행 중..."):
+                        agent = get_agent()
+                        from src.executor.bigquery_client import BigQueryExecutor
+                        from src.executor.data_processor import DataProcessor
+
+                        # BigQuery 실행
+                        bq_executor = BigQueryExecutor(agent.config.bigquery)
+                        exec_result = bq_executor.execute(
+                            st.session_state.pending_sql,
+                            max_results=agent.config.bigquery.max_results
+                        )
+
+                        if not exec_result.is_success():
+                            st.error(f"쿼리 실행 실패: {exec_result.error}")
+                        else:
+                            df = exec_result.data
+
+                            # 데이터 처리
+                            data_processor = DataProcessor(agent.config.analysis)
+                            proc_result = data_processor.process(df)
+
+                            if proc_result.is_success():
+                                proc_data = proc_result.data
+                                from src.types import AnalysisResult
+                                analysis_result = AnalysisResult(
+                                    query=st.session_state.pending_query,
+                                    sql=st.session_state.pending_sql,
+                                    data=proc_data["df_cleaned"],
+                                    stats=proc_data["stats"],
+                                    explanation=proc_data["explanation"],
+                                    success=True,
+                                    data_quality=proc_data["data_quality"],
+                                    sample_warning=proc_data["sample_warning"],
+                                    cost_estimate=cost_estimate,
+                                    cost_status=cost_status,
+                                    cost_message=cost_message,
                                 )
+                                display_results(analysis_result)
 
-                                if not exec_result.is_success():
-                                    st.error(f"쿼리 실행 실패: {exec_result.error}")
-                                else:
-                                    df = exec_result.data
-
-                                    # 데이터 처리
-                                    data_processor = DataProcessor(agent.config.analysis)
-                                    proc_result = data_processor.process(df)
-
-                                    if proc_result.is_success():
-                                        proc_data = proc_result.data
-                                        from src.types import AnalysisResult
-                                        analysis_result = AnalysisResult(
-                                            query=st.session_state.pending_query,
-                                            sql=st.session_state.pending_sql,
-                                            data=proc_data["df_cleaned"],
-                                            stats=proc_data["stats"],
-                                            explanation=proc_data["explanation"],
-                                            success=True,
-                                            data_quality=proc_data["data_quality"],
-                                            sample_warning=proc_data["sample_warning"],
-                                            cost_estimate=cost_estimate,
-                                            cost_status=cost_status,
-                                            cost_message=cost_message,
-                                        )
-                                        display_results(analysis_result)
-
-                                        # 완료 후 상태 초기화
-                                        del st.session_state.pending_sql
-                                        del st.session_state.pending_query
-                                        del st.session_state.cost_estimate
-                                        del st.session_state.cost_status
-                                        del st.session_state.cost_message
-                                        st.rerun()  # 사이드바 LLM 비용 통계 업데이트
-                                    else:
-                                        st.error(f"데이터 처리 실패: {proc_result.error}")
-                        except Exception as e:
-                            st.error(f"예상치 못한 오류: {str(e)}")
+                                # 완료 후 상태 초기화
+                                del st.session_state.pending_sql
+                                del st.session_state.pending_query
+                                del st.session_state.cost_estimate
+                                del st.session_state.cost_status
+                                del st.session_state.cost_message
+                                st.rerun()  # 사이드바 LLM 비용 통계 업데이트
+                            else:
+                                st.error(f"데이터 처리 실패: {proc_result.error}")
+                except Exception as e:
+                    st.error(f"예상치 못한 오류: {str(e)}")
 
             with col2:
                 cancel_sql = st.button("취소", key="nlq_cancel")
