@@ -55,8 +55,8 @@ ORDER BY user_count DESC
     },
 
     'scholar_user_credit_by_plan': {
-        'description': 'Scholar pro/max 사용자의 credit 사용량 분석',
-        'use_case': 'Scholar 서비스 사용자 중 pro/max 구독자의 월별 credit 사용량',
+        'description': '라이너 스칼라 pro/max 사용자의 credit 사용량 분석',
+        'use_case': '라이너 스칼라(Scholar) 서비스 사용자 중 pro 또는 max 구독자의 크레딧 사용량',
         'sql': """
 WITH scholar_users AS (
   SELECT DISTINCT user_id

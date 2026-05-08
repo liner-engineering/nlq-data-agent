@@ -256,6 +256,42 @@ WHERE event_type = 'make_chat'
 
 **주의**: DATE(event_time)을 사용하면 BigQuery가 자동으로 partition pruning을 적용합니다 (monotonic function 최적화).
 
+## ⚠️ CRITICAL: 두 테이블 조인 시 IN 서브쿼리 금지 - JOIN 권장
+
+**같은 테이블을 여러 번 읽는 CTE 구조 금지. 단일 패스 처리로 통합하세요!**
+
+**특히 EVENTS_296805와 fct_moon_subscription을 조인할 때:**
+- ❌ 금지: `WHERE user_id IN (SELECT user_id FROM fct_moon_subscription ...)`
+  → BigQuery 타입 불일치 에러 (INT64 vs STRING)
+- ✓ 권장: JOIN으로 직접 연결
+  → 타입 안전, 성능 우수
+
+```sql
+-- ❌ 나쁜 예: IN 서브쿼리 (타입 불일치)
+WITH scholar_users AS (
+  SELECT user_id
+  FROM `liner-219011.analysis.EVENTS_296805`
+  WHERE liner_product = 'researcher'
+)
+SELECT ... FROM agent_credit_usage_log
+WHERE user_id IN (SELECT user_id FROM scholar_users)
+  AND user_id IN (SELECT user_id FROM fct_moon_subscription WHERE plan_id IN ('pro', 'max'))
+  -- ↑ 에러: INT64 (events.user_id) vs STRING (fct_moon_subscription.user_id)
+
+-- ✓ 좋은 예: JOIN 사용
+SELECT ...
+FROM agent_credit_usage_log acu
+JOIN (
+  SELECT DISTINCT SAFE_CAST(user_id AS INT64) AS user_id
+  FROM fct_moon_subscription
+  WHERE plan_id IN ('pro', 'max')
+) subs ON acu.user_id = subs.user_id
+WHERE acu.user_id IN (
+  SELECT user_id FROM EVENTS_296805
+  WHERE liner_product = 'researcher'
+)
+```
+
 ## ⚠️ CRITICAL: CTE 중복 스캔 제거
 
 **같은 테이블을 여러 번 읽는 CTE 구조 금지. 단일 패스 처리로 통합하세요!**
