@@ -378,9 +378,16 @@ def main():
                             if proc_result.is_success():
                                 proc_data = proc_result.data
                                 from src.types import AnalysisResult
+
+                                # 상태 저장 (display_results 호출 전에 session_state에서 삭제)
+                                saved_sql = st.session_state.pending_sql
+                                saved_query = st.session_state.pending_query
+                                del st.session_state.pending_sql
+                                del st.session_state.pending_query
+
                                 analysis_result = AnalysisResult(
-                                    query=st.session_state.pending_query,
-                                    sql=st.session_state.pending_sql,
+                                    query=saved_query,
+                                    sql=saved_sql,
                                     data=proc_data["df_cleaned"],
                                     stats=proc_data["stats"],
                                     explanation=proc_data["explanation"],
@@ -393,16 +400,13 @@ def main():
                                 )
                                 display_results(analysis_result)
 
-                                # 완료 후 상태 초기화
-                                del st.session_state.pending_sql
-                                del st.session_state.pending_query
+                                # 완료 후 나머지 상태 초기화
                                 if "cost_estimate" in st.session_state:
                                     del st.session_state.cost_estimate
                                 if "cost_status" in st.session_state:
                                     del st.session_state.cost_status
                                 if "cost_message" in st.session_state:
                                     del st.session_state.cost_message
-                                st.rerun()  # 사이드바 LLM 비용 통계 업데이트
                             else:
                                 st.error(f"데이터 처리 실패: {proc_result.error}")
                 except Exception as e:
