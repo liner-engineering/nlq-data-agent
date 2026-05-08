@@ -130,12 +130,8 @@ def display_cost_info(result):
 
 
 def display_results(result):
-    """결과 표시"""
+    """결과 표시 (SQL은 review 섹션에서 이미 표시했으므로 생략)"""
     if result.success:
-        # SQL 표시
-        st.subheader("생성된 SQL")
-        st.code(result.sql, language="sql")
-
         # 결과 DataFrame
         st.subheader("쿼리 결과")
         st.dataframe(result.data, use_container_width=True)
