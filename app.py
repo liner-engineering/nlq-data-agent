@@ -51,63 +51,76 @@ def get_analysis_agent():
 
 
 def _init_session_state():
-    """Session state 초기화"""
-    if "query_history" not in st.session_state:
-        st.session_state.query_history = []
-    if "total_bytes_processed" not in st.session_state:
-        st.session_state.total_bytes_processed = 0
-    if "total_queries" not in st.session_state:
-        st.session_state.total_queries = 0
+    """Session state 초기화 (LLM 비용 추적용)"""
+    if "llm_call_history" not in st.session_state:
+        st.session_state.llm_call_history = []
+    if "total_llm_cost" not in st.session_state:
+        st.session_state.total_llm_cost = 0.0
+    if "total_input_tokens" not in st.session_state:
+        st.session_state.total_input_tokens = 0
+    if "total_output_tokens" not in st.session_state:
+        st.session_state.total_output_tokens = 0
 
 
-def _calculate_cost_usd(bytes_processed: int) -> float:
-    """바이트를 USD 비용으로 변환 (BigQuery: $6.5 per TB)"""
-    gb = bytes_processed / (1024 ** 3)
-    return gb * 6.5 / 1000  # $6.5 per TB = $0.0065 per GB
+def _llm_model_price(model: str) -> dict[str, float]:
+    """LLM 모델별 가격 (input, output per 1M tokens)"""
+    prices = {
+        "gemini-2.5-flash-lite": {"input": 0.075, "output": 0.30},
+        "gemini-2.5-flash": {"input": 0.075, "output": 0.30},
+        "gpt-4": {"input": 0.03, "output": 0.06},
+        "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
+    }
+    return prices.get(model, {"input": 0.075, "output": 0.30})
 
 
-def _add_to_cost_history(query: str, bytes_processed: int):
-    """비용 이력에 쿼리 추가"""
+def _add_llm_cost(model: str, input_tokens: int, output_tokens: int):
+    """LLM 호출 비용 추가"""
     _init_session_state()
-    cost_usd = _calculate_cost_usd(bytes_processed)
-    st.session_state.query_history.append({
-        "query": query[:50],
-        "bytes_processed": bytes_processed,
-        "cost_usd": cost_usd,
+    prices = _llm_model_price(model)
+    input_cost = (input_tokens / 1_000_000) * prices["input"]
+    output_cost = (output_tokens / 1_000_000) * prices["output"]
+    total_cost = input_cost + output_cost
+
+    st.session_state.llm_call_history.append({
+        "model": model.split("/")[-1],  # 간단한 모델명
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost": total_cost,
     })
-    st.session_state.total_bytes_processed += bytes_processed
-    st.session_state.total_queries += 1
+    st.session_state.total_llm_cost += total_cost
+    st.session_state.total_input_tokens += input_tokens
+    st.session_state.total_output_tokens += output_tokens
 
 
-def display_cost_statistics():
-    """좌측 사이드바에 누적 비용 통계 표시"""
+def display_llm_cost_statistics():
+    """좌측 사이드바에 LLM 누적 비용 통계 표시"""
     _init_session_state()
-
-    total_gb = st.session_state.total_bytes_processed / (1024 ** 3)
-    total_cost = _calculate_cost_usd(st.session_state.total_bytes_processed)
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("💰 비용 통계")
+    st.sidebar.subheader("💰 LLM 비용 통계")
 
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        st.metric("누적 비용", f"${total_cost:.4f}", delta=None)
+        st.metric("누적 비용", f"${st.session_state.total_llm_cost:.6f}", delta=None)
     with col2:
-        st.metric("스캔량", f"{total_gb:.2f} GB", delta=None)
+        st.metric("API 호출", len(st.session_state.llm_call_history), delta=None)
 
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        st.metric("쿼리 수", st.session_state.total_queries, delta=None)
+        st.metric("입력 토큰", f"{st.session_state.total_input_tokens:,}", delta=None)
     with col2:
-        avg_cost = total_cost / max(st.session_state.total_queries, 1)
-        st.metric("쿼리당 평균", f"${avg_cost:.6f}", delta=None)
+        st.metric("출력 토큰", f"{st.session_state.total_output_tokens:,}", delta=None)
 
-    # 최근 쿼리 이력
-    if st.session_state.query_history:
-        with st.sidebar.expander("📜 최근 쿼리 이력"):
-            for i, item in enumerate(reversed(st.session_state.query_history[-5:]), 1):
-                st.write(f"{i}. {item['query']}")
-                st.caption(f"  비용: ${item['cost_usd']:.6f} | 스캔: {item['bytes_processed'] / (1024**3):.2f} GB")
+    # 최근 LLM 호출 이력
+    if st.session_state.llm_call_history:
+        with st.sidebar.expander("📜 최근 API 호출"):
+            for i, call in enumerate(reversed(st.session_state.llm_call_history[-5:]), 1):
+                st.write(f"{i}. {call['model']}")
+                st.caption(
+                    f"  비용: ${call['cost']:.8f} | "
+                    f"입력: {call['input_tokens']:,} | "
+                    f"출력: {call['output_tokens']:,}"
+                )
 
 
 def display_cost_info(result):
@@ -275,8 +288,8 @@ def main():
         - "이탈 사용자의 특징은?"
         """)
 
-        # 비용 통계
-        display_cost_statistics()
+        # LLM 비용 통계
+        display_llm_cost_statistics()
 
     # 탭 선택
     tab1, tab2 = st.tabs(["NLQ 쿼리", "자동 분석"])
@@ -326,7 +339,12 @@ def main():
                         if sql_result.is_success():
                             sql = sql_result.data
 
-                            # 최종 비용 확인
+                            # LLM 비용 추적 (추정 토큰)
+                            estimated_input_tokens = len(query_stripped) // 4 + 500  # 프롬프트 추정
+                            estimated_output_tokens = len(sql) // 4  # SQL 출력 추정
+                            _add_llm_cost("gemini-2.5-flash-lite", estimated_input_tokens, estimated_output_tokens)
+
+                            # BigQuery 비용 확인
                             cost_result = agent.bq_executor.dry_run(sql)
                             if cost_result.is_success():
                                 cost_estimate = cost_result.data
@@ -369,8 +387,7 @@ def main():
                     bytes_for_display = cost_estimate.get("bytes_processed", 0)
                 if bytes_for_display > 0:
                     gb_billed = bytes_for_display / (1024 ** 3)
-                    cost_usd = _calculate_cost_usd(bytes_for_display)
-                    st.info(f"예상 비용: {gb_billed:.2f} GB (약 ${cost_usd:.6f})")
+                    st.info(f"📊 BigQuery 스캔: {gb_billed:.2f} GB\n*(실제 청구는 Google Cloud Console에서 확인하세요)*")
 
             if cost_status == "warning" or cost_status == "alert":
                 st.warning(cost_message)
@@ -426,21 +443,13 @@ def main():
                                         )
                                         display_results(analysis_result)
 
-                                        # 누적 비용 업데이트
-                                        bytes_processed = cost_estimate.get("bytes_processed", 0)
-                                        if bytes_processed > 0:
-                                            _add_to_cost_history(
-                                                st.session_state.pending_query,
-                                                bytes_processed
-                                            )
-
                                         # 완료 후 상태 초기화
                                         del st.session_state.pending_sql
                                         del st.session_state.pending_query
                                         del st.session_state.cost_estimate
                                         del st.session_state.cost_status
                                         del st.session_state.cost_message
-                                        st.rerun()  # 사이드바 비용 통계 업데이트
+                                        st.rerun()  # 사이드바 LLM 비용 통계 업데이트
                                     else:
                                         st.error(f"데이터 처리 실패: {proc_result.error}")
                         except Exception as e:
