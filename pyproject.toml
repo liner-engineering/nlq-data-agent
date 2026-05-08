@@ -29,6 +29,7 @@ dependencies = [
     "streamlit>=1.28.0",
     "db-dtypes>=1.5.1",
     "sentence-transformers>=5.4.1",
+    "sqlglot>=30.0.0",
 ]
 
 [project.optional-dependencies]

@@ -50,6 +50,66 @@ def get_analysis_agent():
         st.stop()
 
 
+def _init_session_state():
+    """Session state 초기화"""
+    if "query_history" not in st.session_state:
+        st.session_state.query_history = []
+    if "total_bytes_processed" not in st.session_state:
+        st.session_state.total_bytes_processed = 0
+    if "total_queries" not in st.session_state:
+        st.session_state.total_queries = 0
+
+
+def _calculate_cost_usd(bytes_processed: int) -> float:
+    """바이트를 USD 비용으로 변환 (BigQuery: $6.5 per TB)"""
+    gb = bytes_processed / (1024 ** 3)
+    return gb * 6.5 / 1000  # $6.5 per TB = $0.0065 per GB
+
+
+def _add_to_cost_history(query: str, bytes_processed: int):
+    """비용 이력에 쿼리 추가"""
+    _init_session_state()
+    cost_usd = _calculate_cost_usd(bytes_processed)
+    st.session_state.query_history.append({
+        "query": query[:50],
+        "bytes_processed": bytes_processed,
+        "cost_usd": cost_usd,
+    })
+    st.session_state.total_bytes_processed += bytes_processed
+    st.session_state.total_queries += 1
+
+
+def display_cost_statistics():
+    """좌측 사이드바에 누적 비용 통계 표시"""
+    _init_session_state()
+
+    total_gb = st.session_state.total_bytes_processed / (1024 ** 3)
+    total_cost = _calculate_cost_usd(st.session_state.total_bytes_processed)
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("💰 비용 통계")
+
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        st.metric("누적 비용", f"${total_cost:.4f}", delta=None)
+    with col2:
+        st.metric("스캔량", f"{total_gb:.2f} GB", delta=None)
+
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        st.metric("쿼리 수", st.session_state.total_queries, delta=None)
+    with col2:
+        avg_cost = total_cost / max(st.session_state.total_queries, 1)
+        st.metric("쿼리당 평균", f"${avg_cost:.6f}", delta=None)
+
+    # 최근 쿼리 이력
+    if st.session_state.query_history:
+        with st.sidebar.expander("📜 최근 쿼리 이력"):
+            for i, item in enumerate(reversed(st.session_state.query_history[-5:]), 1):
+                st.write(f"{i}. {item['query']}")
+                st.caption(f"  비용: ${item['cost_usd']:.6f} | 스캔: {item['bytes_processed'] / (1024**3):.2f} GB")
+
+
 def display_cost_info(result):
     """비용 정보 표시"""
     cost_status = getattr(result, 'cost_status', 'unknown')
@@ -160,6 +220,9 @@ def display_analysis_results(result):
 
 
 def main():
+    # 초기화
+    _init_session_state()
+
     # 헤더
     st.title("NLQ Data Agent")
     st.markdown("자연어로 데이터를 분석하세요. SQL을 자동으로 생성하고 실행합니다.")
@@ -211,6 +274,9 @@ def main():
         - "전환율이 어떻게 되나요?"
         - "이탈 사용자의 특징은?"
         """)
+
+        # 비용 통계
+        display_cost_statistics()
 
     # 탭 선택
     tab1, tab2 = st.tabs(["NLQ 쿼리", "자동 분석"])
@@ -264,7 +330,10 @@ def main():
                             cost_result = agent.bq_executor.dry_run(sql)
                             if cost_result.is_success():
                                 cost_estimate = cost_result.data
+                                # dry-run에서는 bytes_billed가 0일 수 있으므로 bytes_processed 사용
                                 bytes_billed = cost_estimate.get("bytes_billed", 0)
+                                if bytes_billed == 0:
+                                    bytes_billed = cost_estimate.get("bytes_processed", 0)
                                 cost_status, cost_message = agent._estimate_cost(bytes_billed)
                             else:
                                 cost_estimate = {}
@@ -294,9 +363,14 @@ def main():
             cost_message = st.session_state.get("cost_message", "")
             cost_estimate = st.session_state.get("cost_estimate", {})
 
-            if cost_estimate and "bytes_billed" in cost_estimate:
-                gb_billed = cost_estimate["bytes_billed"] / (1024 ** 3)
-                st.info(f"예상 비용: {gb_billed:.2f} GB (약 ${gb_billed * 6.5 / 1000:.2f})")
+            if cost_estimate:
+                bytes_for_display = cost_estimate.get("bytes_billed", 0)
+                if bytes_for_display == 0:
+                    bytes_for_display = cost_estimate.get("bytes_processed", 0)
+                if bytes_for_display > 0:
+                    gb_billed = bytes_for_display / (1024 ** 3)
+                    cost_usd = _calculate_cost_usd(bytes_for_display)
+                    st.info(f"예상 비용: {gb_billed:.2f} GB (약 ${cost_usd:.6f})")
 
             if cost_status == "warning" or cost_status == "alert":
                 st.warning(cost_message)
@@ -352,12 +426,21 @@ def main():
                                         )
                                         display_results(analysis_result)
 
+                                        # 누적 비용 업데이트
+                                        bytes_processed = cost_estimate.get("bytes_processed", 0)
+                                        if bytes_processed > 0:
+                                            _add_to_cost_history(
+                                                st.session_state.pending_query,
+                                                bytes_processed
+                                            )
+
                                         # 완료 후 상태 초기화
                                         del st.session_state.pending_sql
                                         del st.session_state.pending_query
                                         del st.session_state.cost_estimate
                                         del st.session_state.cost_status
                                         del st.session_state.cost_message
+                                        st.rerun()  # 사이드바 비용 통계 업데이트
                                     else:
                                         st.error(f"데이터 처리 실패: {proc_result.error}")
                         except Exception as e:
