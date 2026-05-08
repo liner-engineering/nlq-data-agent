@@ -16,6 +16,7 @@ class EvalCase:
     must_not_contain: list[str] = field(default_factory=list)  # 절대 포함 X
     category: str = "general"
     gold_sql: str = ""  # Execution-based eval용 정답 SQL (선택사항)
+    must_be_under_bytes: int = 0  # 비용 제약: 이 바이트 이하로 스캔해야 함 (0=제약 없음)
 
 
 EVAL_CASES = [
@@ -183,5 +184,72 @@ EVAL_CASES = [
         must_contain=["plan_id", "'max'", "make_chat"],
         must_not_contain=["liner_product'),  IN ('max'"],
         category="glossary_compliance",
+    ),
+
+    # === 카테고리 8: SQL 최적화 (비용 절감) ===
+    # 다음 평가 케이스들은 비용 제약을 포함합니다.
+    # must_be_under_bytes를 초과하면 실패합니다. (dry-run 스캔 바이트 기준)
+
+    EvalCase(
+        question="Write 서비스 사용자의 4월 크레딧 사용량",
+        expected_tables=["EVENTS_296805", "agent_credit_usage_log"],
+        must_contain=[
+            "liner_product", "'write'",  # Write 필터
+            "DATE(event_time)",  # 파티션 필터
+            "agent_credit_usage_log",  # 크레딧 데이터
+            "delta_amount",  # 크레딧 사용량
+        ],
+        must_not_contain=[
+            "BETWEEN '2024'",  # 잘못된 연도
+        ],
+        category="optimization_cost",
+        must_be_under_bytes=107_374_182_400,  # 100GB 제약 (3TB 방지)
+    ),
+
+    EvalCase(
+        question="라이너 스칼라(Scholar) Pro/Max 구독자의 크레딧 사용량 분석",
+        expected_tables=["EVENTS_296805", "fct_moon_subscription", "agent_credit_usage_log"],
+        must_contain=[
+            "researcher",  # Scholar = researcher
+            "product_category", "pro", "max",  # 구독 필터
+            "agent_credit_usage_log",  # 크레딧
+            "delta_amount",  # 사용량
+        ],
+        must_not_contain=[
+            "UNION",  # 같은 테이블 중복 읽기 금지
+            "product_category IN ('pro', 'max')",  # UNION 패턴
+        ],
+        category="optimization_cost",
+        must_be_under_bytes=10_737_418_240,  # 10GB 제약 (좁은 세트 먼저 전략)
+    ),
+
+    EvalCase(
+        question="지난 30일 EVENTS_296805에서 전체 이벤트 수",
+        expected_tables=["EVENTS_296805"],
+        must_contain=[
+            "DATE(event_time)",  # 파티션 필터
+            "COUNT",
+        ],
+        must_not_contain=[
+            "2024",  # 과거 연도 금지
+            "WHERE event_type",  # 파티션 필터가 먼저 와야 함
+        ],
+        category="optimization_cost",
+        must_be_under_bytes=1_073_741_824,  # 1GB 제약 (30일 필터 효과 검증)
+    ),
+
+    EvalCase(
+        question="Pro 구독자들의 최근 30일 활동",
+        expected_tables=["fct_moon_subscription", "EVENTS_296805"],
+        must_contain=[
+            "product_category", "'pro'",  # 구독 필터
+            "DATE(event_time)",  # 파티션 필터
+            "JOIN",  # 명시적 조인
+        ],
+        must_not_contain=[
+            "UNION",  # 좁은 세트 먼저 패턴 필수
+        ],
+        category="optimization_cost",
+        must_be_under_bytes=10_737_418_240,  # 10GB 제약
     ),
 ]
