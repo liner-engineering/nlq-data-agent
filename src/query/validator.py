@@ -117,6 +117,10 @@ class SQLValidator:
             glossary_errors = self._lint_glossary_violations(sql, user_query)
             errors.extend(glossary_errors)
 
+        # 10. SQL 의미성 검증 (무의미한 쿼리 패턴)
+        meaningfulness_errors = self._validate_meaningfulness(sql)
+        errors.extend(meaningfulness_errors)
+
         # 결과 반환
         is_valid = len(errors) == 0
 
@@ -382,5 +386,47 @@ class SQLValidator:
                             errors.append(
                                 f"[Glossary Violation] '{term}' 관련 쿼리에서 금지된 패턴 감지: {anti_pattern}"
                             )
+
+        return errors
+
+    def _validate_meaningfulness(self, sql: str) -> list[str]:
+        """
+        무의미한 SQL 패턴 검출
+
+        다음 패턴을 감지:
+        - 리터럴 상수만 SELECT하는 경우
+        - 집계 없이 LIMIT 1 사용
+        """
+        errors: list[str] = []
+        sql_upper = sql.upper()
+
+        # SELECT 절 추출
+        select_match = re.search(r"SELECT\s+(.+?)\s+FROM", sql_upper, re.DOTALL)
+        if select_match:
+            select_clause = select_match.group(1).strip()
+
+            # 패턴 1: 리터럴 상수만 SELECT하는 경우 ('Unknown' AS col)
+            # 예: SELECT 'Unknown' AS user_segment FROM ...
+            if re.match(r"^\s*['\"]([^'\"]*)['\"]\s+AS\s+\w+\s*$", select_clause, re.IGNORECASE):
+                errors.append(
+                    "리터럴 상수만 SELECT하고 있습니다. "
+                    "실제 데이터 컬럼이나 집계(COUNT, SUM 등)가 필요합니다."
+                )
+
+            # 패턴 2: 집계 없는 LIMIT 1 (ORDER BY는 가능)
+            # LIMIT 1 + 집계 함수 없음 + ORDER BY 없음 = 의심
+            if "LIMIT 1" in sql_upper or "LIMIT\n1" in sql_upper:
+                has_aggregate = any(
+                    agg in sql_upper
+                    for agg in ["COUNT(", "SUM(", "AVG(", "MAX(", "MIN(", "GROUP BY"]
+                )
+                has_order_by = "ORDER BY" in sql_upper
+
+                if not has_aggregate and not has_order_by:
+                    errors.append(
+                        "집계나 정렬 없이 LIMIT 1을 사용하고 있습니다. "
+                        "분석 의도가 불명확합니다. "
+                        "GROUP BY, 정렬, 또는 집계 함수를 추가하세요."
+                    )
 
         return errors
