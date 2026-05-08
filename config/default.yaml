@@ -25,6 +25,11 @@ llm:
   temperature: 0.2
   max_tokens: 2000
 
+logging:
+  level: INFO
+  format: json
+  file_path: ./logs/nlq-agent.log
+
 output:
   save_results: true
   result_dir: ./results/

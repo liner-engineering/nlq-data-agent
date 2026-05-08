@@ -11,7 +11,7 @@ from src.config import Config, load_config
 from src.executor.bigquery_client import BigQueryExecutor
 from src.executor.data_processor import DataProcessor
 from src.exceptions import NLQAgentException, SQLGenerationError
-from src.logging_config import ContextualLogger, PerformanceLogger
+from src.logging_config import ContextualLogger, PerformanceLogger, setup_logging
 from src.query.context_builder import ContextBuilder
 from src.query.generator import SQLGenerator
 from src.query.validator import SQLValidator
@@ -55,7 +55,11 @@ class NLQAgent:
             config: Config 인스턴스 (기본값: 환경에서 로드)
         """
         self.config = config or load_config()
+
+        # 로깅 초기화 (config에 따라 파일 로깅 활성화)
+        setup_logging(self.config.logging)
         logger.info("NLQAgent 초기화")
+        logger.info(f"로그 파일: {self.config.logging.file_path or '(콘솔만)'}")
 
         # 모듈 초기화
         self.validator = SQLValidator()
