@@ -371,6 +371,207 @@ ORDER BY total_credit_used DESC
 LIMIT 100
             '''
         }
+    },
+
+    'like.fct_credit_transaction': {
+        'full_name': 'liner-219011.like.fct_credit_transaction',
+        'description': '크레딧 거래 모델 (발행, 사용, 만료)',
+        'row_count_estimate': '~100M+',
+        'date_range': '2025-08-05 ~ present',
+        'columns': {
+            'credit_item_id': {'type': 'INTEGER', 'description': '크레딧 아이템 ID'},
+            'user_id': {'type': 'INTEGER', 'description': '사용자 ID'},
+            'event_type': {'type': 'STRING', 'description': "'issued', 'spent', 'expired'"},
+            'amount': {'type': 'INTEGER', 'description': '크레딧 금액 (양수)'},
+            'source_type': {'type': 'STRING', 'description': "'purchase', 'grant', 'subscription' 등"},
+            'event_date': {'type': 'DATE', 'description': '발생 날짜'},
+        },
+        'critical_pattern': {
+            'description': '크레딧 발행/사용/만료 집계',
+            'method': 'SUM(amount) GROUP BY event_type (issued/spent/expired)'
+        }
+    },
+
+    'like.fct_subscription_revenue_recognition': {
+        'full_name': 'liner-219011.like.fct_subscription_revenue_recognition',
+        'description': '인식매출 (발생주의): 구독 기간 일별 분배 + VAT 조정',
+        'row_count_estimate': '~50M+',
+        'columns': {
+            'dt': {'type': 'DATE', 'description': '인식 날짜'},
+            'user_id': {'type': 'INTEGER', 'description': '사용자 ID'},
+            'revenue_recognition_krw': {'type': 'NUMERIC', 'description': 'KRW 인식매출'},
+            'revenue_recognition_usd': {'type': 'NUMERIC', 'description': 'USD 인식매출'},
+            'plan_type': {'type': 'STRING', 'description': "'pro', 'max'"},
+        },
+        'usage': '구독 관련 인식매출 집계'
+    },
+
+    'like.fct_subscription_revenue_financial': {
+        'full_name': 'liner-219011.like.fct_subscription_revenue_financial',
+        'description': '수취매출 (현금주의): 실제 결제 시점의 금액',
+        'row_count_estimate': '~5M+',
+        'columns': {
+            'dt': {'type': 'DATE', 'description': '결제 날짜'},
+            'user_id': {'type': 'INTEGER', 'description': '사용자 ID'},
+            'revenue_krw': {'type': 'NUMERIC', 'description': 'KRW 수취매출'},
+            'revenue_usd': {'type': 'NUMERIC', 'description': 'USD 수취매출'},
+            'type': {'type': 'STRING', 'description': "'payment', 'refund', 'dispute', 'reversal' (failure 제외)"},
+            'platform': {'type': 'STRING', 'description': "'stripe', 'tosspayments', 'paddle' 등"},
+        },
+        'critical_pattern': {
+            'description': '수취매출 필터링',
+            'method': "WHERE type IN ('payment', 'refund', 'dispute', 'reversal') -- failure 제외"
+        }
+    },
+
+    'like.met_credit_revenue_daily_summary': {
+        'full_name': 'liner-219011.like.met_credit_revenue_daily_summary',
+        'description': '크레딧 매출 요약: 인식매출(earned+breakage) + 수취매출(booking) + 이연매출',
+        'columns': {
+            'dt': {'type': 'DATE', 'description': '날짜'},
+            'earned_revenue_usd': {'type': 'NUMERIC', 'description': 'USD 실현매출'},
+            'earned_revenue_krw': {'type': 'NUMERIC', 'description': 'KRW 실현매출'},
+            'breakage_revenue_usd': {'type': 'NUMERIC', 'description': 'USD 만료 매출'},
+            'breakage_revenue_krw': {'type': 'NUMERIC', 'description': 'KRW 만료 매출'},
+            'booking_amount_usd': {'type': 'NUMERIC', 'description': 'USD 결제액'},
+            'booking_amount_krw': {'type': 'NUMERIC', 'description': 'KRW 결제액'},
+            'deferred_revenue_usd': {'type': 'NUMERIC', 'description': '미실현 이연매출 (USD)'},
+            'deferred_revenue_krw': {'type': 'NUMERIC', 'description': '미실현 이연매출 (KRW)'},
+        }
+    },
+
+    'like.int_revenue_daily_by_business_model': {
+        'full_name': 'liner-219011.like.int_revenue_daily_by_business_model',
+        'description': '인식매출 일별 피벗: ads, api, subscription, credit, partnership, contract, b2b_ax, gov_grant',
+        'columns': {
+            'dt': {'type': 'DATE', 'description': '날짜'},
+            'ads': {'type': 'NUMERIC', 'description': 'ads 인식매출'},
+            'api': {'type': 'NUMERIC', 'description': 'api 인식매출'},
+            'subscription': {'type': 'NUMERIC', 'description': 'subscription 인식매출'},
+            'credit': {'type': 'NUMERIC', 'description': 'credit 인식매출'},
+            'partnership': {'type': 'NUMERIC', 'description': 'partnership 인식매출'},
+            'contract': {'type': 'NUMERIC', 'description': 'contract 인식매출'},
+            'b2b_ax': {'type': 'NUMERIC', 'description': 'b2b_ax 인식매출'},
+            'gov_grant': {'type': 'NUMERIC', 'description': 'gov_grant 인식매출'},
+        }
+    },
+
+    'like.int_revenue_daily_by_business_model_received': {
+        'full_name': 'liner-219011.like.int_revenue_daily_by_business_model_received',
+        'description': '수취매출 일별 피벗: 8가지 business model',
+        'columns': {
+            'dt': {'type': 'DATE', 'description': '날짜'},
+            'ads': {'type': 'NUMERIC', 'description': 'ads 수취매출'},
+            'api': {'type': 'NUMERIC', 'description': 'api 수취매출'},
+            'subscription': {'type': 'NUMERIC', 'description': 'subscription 수취매출'},
+            'credit': {'type': 'NUMERIC', 'description': 'credit 수취매출'},
+        }
+    },
+
+    'cdc_service_db_new_liner.agent_credit_item': {
+        'full_name': 'liner-219011.cdc_service_db_new_liner.agent_credit_item',
+        'description': '크레딧 항목: 할당된 크레딧 지갑 기록 (스냅샷)',
+        'columns': {
+            'id': {'type': 'INTEGER', 'description': 'Primary key'},
+            'user_id': {'type': 'INTEGER', 'description': '사용자 ID'},
+            'source_type': {'type': 'STRING', 'description': "'purchase', 'subscription', 'grant'"},
+            'total_amount': {'type': 'INTEGER', 'description': '할당된 총 크레딧'},
+            'remaining_amount': {'type': 'INTEGER', 'description': '남은 크레딧'},
+            'created_at': {'type': 'TIMESTAMP', 'description': '할당 시간'},
+            'expires_at': {'type': 'TIMESTAMP', 'description': '만료 시간'},
+        },
+        'note': '현재 상태 스냅샷만 제공 (트랜잭션 로그 아님)'
+    },
+
+    'like.met_individual_subscription_arr_ltm_daily': {
+        'full_name': 'liner-219011.like.met_individual_subscription_arr_ltm_daily',
+        'description': '개인 구독 ARR (LTM - Last 12 Months)',
+        'columns': {
+            'dt': {'type': 'DATE', 'description': '날짜'},
+            'arr_amount': {'type': 'NUMERIC', 'description': 'ARR 금액'},
+            'mrr_amount': {'type': 'NUMERIC', 'description': 'MRR 금액'},
+            'active_subscription_count': {'type': 'INTEGER', 'description': '활성 구독 수'},
+        },
+        'usage': 'ARR/MRR 분석'
+    },
+
+    'like.met_team_subscription_arr_ltm_daily': {
+        'full_name': 'liner-219011.like.met_team_subscription_arr_ltm_daily',
+        'description': '팀 구독 ARR (LTM)',
+        'usage': '팀 구독 ARR/MRR 분석'
+    },
+
+    'langfuse_data.observations': {
+        'full_name': 'liner-219011.langfuse_data.observations',
+        'description': 'Langfuse 개별 작업 기록 (people_search, API 호출 등)',
+        'row_count_estimate': '~10M+',
+        'date_range': '2026-04-20 ~ present (metadata)',
+        'columns': {
+            'id': {'type': 'STRING', 'description': 'Observation ID'},
+            'trace_id': {'type': 'STRING', 'description': 'Trace ID (fct_langfuse_traces 조인용)'},
+            'name': {'type': 'STRING', 'description': "'handle_people_search' 등"},
+            'start_time': {'type': 'TIMESTAMP', 'description': '시작 시간 (UTC)'},
+            'metadata': {
+                'type': 'JSON',
+                'description': '메타데이터',
+                'important_keys': {
+                    'exa_call_count': 'INT64 — exa API 총 호출 수',
+                    'exa_r1_count': 'INT64 — r1 iteration 호출 수',
+                    'exa_r2_count': 'INT64 — r2 iteration 호출 수',
+                    'raw_card_count': 'INT64 — 필터 전 카드 수',
+                    'final_card_count': 'INT64 — 반환된 카드 수',
+                }
+            },
+        },
+        'critical_pattern': {
+            'description': 'People Search 데이터 추출',
+            'method': "WHERE name = 'handle_people_search' AND DATE(start_time) >= '2026-04-20'"
+        }
+    },
+
+    'langfuse_data.traces': {
+        'full_name': 'liner-219011.langfuse_data.traces',
+        'description': 'Langfuse 전체 트레이스 (쿼리 전체 플로우)',
+        'columns': {
+            'id': {'type': 'STRING', 'description': 'Trace ID'},
+            'name': {'type': 'STRING', 'description': '트레이스 이름'},
+            'start_time': {'type': 'TIMESTAMP', 'description': '시작 시간'},
+            'total_cost': {'type': 'NUMERIC', 'description': '총 비용 (USD)'},
+            'input_cost': {'type': 'NUMERIC', 'description': 'Input 비용'},
+            'output_cost': {'type': 'NUMERIC', 'description': 'Output 비용'},
+        },
+        'usage': '쿼리당 AI 비용 분석 (trace_id JOIN으로 credit_usage와 연결)'
+    },
+
+    'paddle.transaction': {
+        'full_name': 'liner-219011.paddle.transaction',
+        'description': 'Paddle 결제 플랫폼 트랜잭션 (MOR)',
+        'date_range': '2026-03-31 ~ present',
+        'columns': {
+            'id': {'type': 'STRING', 'description': 'Transaction ID'},
+            'status': {'type': 'STRING', 'description': "'completed', 'pending'"},
+            'origin': {'type': 'STRING', 'description': "'subscription_update' for plan change, 'subscription' for normal"},
+            'total_earnings': {'type': 'INTEGER', 'description': 'VAT-excluded 금액 (센트 단위 USD, 원 단위 KRW)'},
+            'total_fee': {'type': 'INTEGER', 'description': 'Paddle 수수료'},
+            'currency': {'type': 'STRING', 'description': "'KRW', 'USD'"},
+            'created_at': {'type': 'TIMESTAMP', 'description': '생성 시간'},
+        },
+        'critical_pattern': {
+            'description': 'Paddle 금액 처리',
+            'method': 'USD: /100.0 (센트→달러), KRW: 그대로 사용 (원 단위)'
+        }
+    },
+
+    'paddle.adjustment': {
+        'full_name': 'liner-219011.paddle.adjustment',
+        'description': 'Paddle 환불/차지백 조정 (transaction 외 모든 post-payment 조정)',
+        'columns': {
+            'id': {'type': 'STRING', 'description': 'Adjustment ID'},
+            'action': {'type': 'STRING', 'description': "'refund', 'chargeback', 'credit', 'credit_reverse'"},
+            'total_amount': {'type': 'INTEGER', 'description': '절대값 (양수) — int 모델에서 action 기반 부호 결정'},
+            'currency': {'type': 'STRING', 'description': "'KRW', 'USD'"},
+        },
+        'note': '모든 금액이 양수로 저장됨 (action으로 부호 결정)'
     }
 }
 

@@ -341,6 +341,92 @@ LIMIT 10
 - WHERE에서 조기 필터링 (HAVING이 아니라 WHERE)
 - HAVING으로 0 값 제거
 
+## ⚠️ 비즈니스 도메인 규칙
+
+### Business Model (매출 분류) — 8가지, Mutually Exclusive
+
+매출은 **정확히 1개 Business Model에만** 속합니다:
+1. **ads**: Ad Manager + Keyword Ad
+2. **api**: Adot API 사용료
+3. **subscription**: 구독료 (인식 vs 수취 구분)
+4. **credit**: 크레딧 구매/사용 (인식 vs 수취 구분)
+5. **partnership**: 파트너 계약
+6. **contract**: 일반 계약
+7. **b2b_ax**: B2B AX 계약
+8. **gov_grant**: 정부 지원사업
+
+### Revenue Recognition (인식매출) vs Payment Received (수취매출)
+
+| 항목 | 인식매출 | 수취매출 |
+|------|--------|--------|
+| **Subscription** | fct_subscription_revenue_recognition (기간 분배 + VAT) | fct_subscription_revenue_financial (결제 시점, type≠failure) |
+| **Credit** | met_credit_revenue_daily_summary (earned + breakage) | met_credit_purchase_bookings (booking 시점) |
+| **Contract형** | fct_contracted_revenue_recognition (기간 분배) | GROUP BY start_date SUM (일시 인식) |
+| **Ads/API** | 양쪽 동일 | 양쪽 동일 |
+
+**중요**: "매출"이라고 하면 인식매출/수취매출 중 어느 것인지 확인하고, 명시되지 않으면 질문해야 함.
+
+### Credit 시스템 (중요!)
+
+**Plan별 월간 기본 할당**:
+- Free: 100 credits/month (일부 지역 30)
+- Pro: 1,000 credits/month
+- Max: 2,500 credits/month
+
+**시스템 마이그레이션** (2025-10-27):
+- Legacy: user_agent_credit_usage_modification_log (양수 = 사용) — 폐기됨
+- Current: agent_credit_usage_log (양수 = 충전, 음수 = 사용) ← **현재 사용**
+
+### ARR/MRR (구독)
+
+- **개인 ARR**: like.met_individual_subscription_arr_ltm_daily (LTM 필터)
+- **팀 ARR**: like.met_team_subscription_arr_ltm_daily (LTM 필터)
+- **NTM** (다음 12개월): _ntm_daily 테이블 사용
+- **Trial**: _trial_no_card_daily (카드 없는 체험판)
+
+### Referral Program (추천 프로그램)
+
+**프로그램**: 초대자와 신청자 모두 크레딧 획득 → P&L = 수익 - AI비용들
+
+**데이터**:
+- 신청자: `entry_type = 'referral_invited'` + `event_type = 'complete_signup'`
+- 초대자: `trigger_type = 'inviter_invite'` + `event_type = 'complete_provide_credit'`
+- 크레딧 사용: `promotion_type = 'referral_signup_reward'` + `use_research_agent_credit`
+- AI 비용: llm_cost (event_properties) 또는 estimation: actual_credit * 0.007
+- 안정화 시작: **2026-04-10** (04-09는 품질 낮음)
+- 초대자 비용 분배: grant-weighted proration
+
+### Statsig A/B 실험
+
+**ID 타입 판별** (매우 중요!):
+- UUID (stableID): `user_properties.stable_id` JOIN 필수
+- Numeric (Liner user_id): 직접 사용 (추가 해석 불필요)
+
+**Cohort 구성**:
+1. 최초 노출일: MIN(event_time) per user
+2. 행동 필터: 노출 **이후** 이벤트만 포함 (행동 오염 방지)
+3. experimentGroupName = NULL 제외 (Cache:Unrecognized)
+4. JSON key: `'$."metadata.config"'`, `'$."metadata.experimentGroupName"'` (dot-notation, 중첩 X)
+
+### People Search (인물검색)
+
+**데이터**: langfuse_data.observations
+- 필터: `name = 'handle_people_search'` (2026-04-20 이후만 가능)
+- 메타데이터: exa_call_count, exa_r1_count, exa_r2_count, raw_card_count, final_card_count
+- 시간: start_time (UTC, KST는 -9시간)
+
+### Payment Platform (결제 플랫폼)
+
+**지원 플랫폼**: stripe, tosspayments, paddle, paypal, apple, google
+
+**Paddle 특수성** (MOR - Merchant of Record):
+- VAT: Paddle이 공제하고 정산 (fct /1.1 적용)
+- 금액 단위: KRW 원 단위, USD 센트 단위 (/100.0)
+- Plan change: origin = 'subscription_update' (line_item quantity>0 = 새 플랜)
+- 데이터 시작: 2026-03-31
+
+**Transaction Type**: payment, refund, dispute, reversal (failure 제외)
+
 ## 응답 형식
 
 SQL 코드블록만 반환. 설명 없음.
