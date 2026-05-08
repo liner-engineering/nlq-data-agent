@@ -83,6 +83,27 @@ WHERE '$.product' = 'scholar'  -- 필드 없음!
 - "Pro 구독자" = `plan_id = 'pro'` (fct_moon_subscription)
 - "Scholar pro 유저" = 둘 다 조건 필요 (두 테이블 조인 또는 IN 서브쿼리)
 
+**⚠️ 타입 변환 필수: 테이블 조인 시 user_id 타입 일치**:
+- EVENTS_296805의 user_id = INTEGER
+- fct_moon_subscription의 user_id = STRING
+- agent_credit_usage_log의 user_id = INTEGER
+
+```sql
+-- ✓ 올바른 방법: SAFE_CAST로 타입 맞추기
+FROM `liner-219011.analysis.EVENTS_296805` e
+WHERE SAFE_CAST(e.user_id AS INT64) IN (
+  SELECT SAFE_CAST(user_id AS INT64)
+  FROM `liner-219011.like.fct_moon_subscription`
+  WHERE plan_id IN ('pro', 'max')
+)
+
+-- 또는 JOIN 사용 (권장)
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acu
+JOIN `liner-219011.like.fct_moon_subscription` s
+  ON CAST(acu.user_id AS STRING) = s.user_id  -- user_id 타입 일치
+  AND plan_id IN ('pro', 'max')
+```
+
 ## ⚠️ CRITICAL: 사용자 세그먼트 분류 방법
 
 **중요**: Liner의 사용자 분류는 "쿼리 내용"으로 한다!
