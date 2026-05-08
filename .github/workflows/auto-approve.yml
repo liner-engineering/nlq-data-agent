@@ -1,0 +1,24 @@
+name: Auto-Approve PRs
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Approve PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              event: 'APPROVE',
+              body: '자동 승인 (Auto-approved)'
+            })
