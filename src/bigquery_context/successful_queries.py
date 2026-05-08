@@ -54,6 +54,32 @@ ORDER BY user_count DESC
         """
     },
 
+    'scholar_user_credit_by_plan': {
+        'description': 'Scholar 사용자의 플랜별 credit 사용량 분석',
+        'use_case': 'Scholar free/pro/max 유저별로 credit을 얼마나 사용했는지 조회',
+        'sql': """
+-- Scholar 사용자의 subscription 플랜 정보와 credit 사용량 조인
+SELECT
+  du.user_id,
+  s.plan_id AS scholar_plan,
+  COUNT(DISTINCT DATE(acul.used_at)) AS usage_days,
+  COUNT(*) AS usage_count,
+  SUM(ABS(acul.delta_amount)) AS total_credit_used,
+  ROUND(AVG(ABS(acul.delta_amount)), 2) AS avg_credit_per_use
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acul
+INNER JOIN `liner-219011.like.dim_user` du
+  ON acul.user_id = du.user_id
+LEFT JOIN `liner-219011.like.fct_moon_subscription` s
+  ON du.user_id = s.user_id
+  AND DATE(acul.used_at) >= DATE(s.subscription_start_at)
+  AND (s.subscription_ended_at IS NULL OR DATE(acul.used_at) <= DATE(s.subscription_ended_at))
+WHERE acul.delta_amount < 0  -- 사용 기록만 (충전은 제외)
+  AND acul.service = 'scholar'  -- Scholar 서비스만
+GROUP BY user_id, scholar_plan
+ORDER BY total_credit_used DESC
+        """
+    },
+
     'write_user_credit_usage': {
         'description': 'Write 서비스 사용자의 credit 사용량 (최적화된 버전)',
         'use_case': 'Write 유저 중 credit을 가장 많이 사용한 사람 TOP 10',

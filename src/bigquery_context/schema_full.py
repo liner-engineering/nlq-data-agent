@@ -261,6 +261,80 @@ BIGQUERY_SCHEMA = {
                 'description': '이미 분류된 카테고리'
             }
         }
+    },
+
+    'cdc_service_db_new_liner.agent_credit_usage_log': {
+        'full_name': 'liner-219011.cdc_service_db_new_liner.agent_credit_usage_log',
+        'description': 'AI Agent Credit 사용 로그',
+        'row_count_estimate': '~500K 이상',
+        'update_frequency': 'Real-time',
+        'date_range': '2024년부터 present',
+        'not_for': [
+            '이벤트 기반 분석 — EVENTS_296805 사용',
+            '구독자 분석 — like.fct_moon_subscription 사용',
+        ],
+        'columns': {
+            'user_id': {
+                'type': 'INTEGER',
+                'nullable': False,
+                'role': 'ENTITY',
+                'description': '사용자 ID',
+            },
+            'delta_amount': {
+                'type': 'FLOAT64',
+                'nullable': False,
+                'role': 'MEASURE',
+                'description': '크레딧 변화량 (음수 = 사용, 양수 = 충전)',
+                'note': '★ 사용량 조회 시 delta_amount < 0 필터 필수',
+                'examples': [-100, -50, 1000],
+            },
+            'used_at': {
+                'type': 'TIMESTAMP',
+                'nullable': False,
+                'role': 'TIME',
+                'description': '사용/충전 시간 (UTC)',
+            },
+            'service': {
+                'type': 'STRING',
+                'nullable': True,
+                'role': 'ATTRIBUTE',
+                'description': '서비스명 (write, scholar, ai_search 등)',
+                'examples': ['write', 'scholar', 'ai_search'],
+            },
+            'model': {
+                'type': 'STRING',
+                'nullable': True,
+                'role': 'ATTRIBUTE',
+                'description': '사용된 AI 모델',
+                'examples': ['gpt-4', 'claude-3', 'gemini'],
+            },
+            'reason': {
+                'type': 'STRING',
+                'nullable': True,
+                'role': 'ATTRIBUTE',
+                'description': '크레딧 변화 사유',
+                'examples': ['usage', 'refund', 'charge', 'promo'],
+            }
+        },
+        'critical_pattern': {
+            'description': '사용자별 credit 사용량 조회',
+            'method': '''
+사용자의 credit 사용량을 집계할 때:
+1. delta_amount < 0으로 필터링 (사용 기록만)
+2. SUM(ABS(delta_amount))으로 사용량 합계
+3. 사용자별 또는 서비스별로 그룹화
+
+예시:
+SELECT
+  user_id,
+  SUM(ABS(delta_amount)) AS total_credit_used,
+  COUNT(*) AS usage_count
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log`
+WHERE delta_amount < 0
+GROUP BY user_id
+ORDER BY total_credit_used DESC
+            '''
+        }
     }
 }
 
@@ -297,6 +371,12 @@ SCHEMA_SUMMARY = """
 - 사용자가 입력한 쿼리 텍스트
 - 약 10M 행
 - 주요 컬럼: user_id, message_text, created_at
+
+### 4. agent_credit_usage_log (Credit 사용 로그)
+- AI 서비스(Scholar, Write 등) 사용 시 credit 차감 기록
+- 약 500K+ 행
+- 주요 컬럼: user_id, delta_amount (음수 = 사용), used_at, service
+- ★ 중요: delta_amount < 0 으로 필터링해야 사용량만 조회
 
 ## 자주 하는 작업
 
