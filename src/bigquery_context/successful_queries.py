@@ -8,6 +8,22 @@ LLM이 참고할 수 있는 실제 작동하는 쿼리들
 """
 
 SUCCESSFUL_QUERIES = {
+    'daily_active_users': {
+        'description': '일별 활성 사용자 수 (DAU) 추이',
+        'use_case': '지난 30일 일별 활성 사용자 추이 확인',
+        'critical_note': '반드시 GROUP BY DATE(event_time)이 필요함! 없으면 30일 누적값이 됨',
+        'sql': """
+SELECT
+  DATE(event_time) AS report_date,
+  COUNT(DISTINCT user_id) AS dau
+FROM `liner-219011.analysis.EVENTS_296805`
+WHERE DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+  AND event_type = 'make_chat'
+GROUP BY DATE(event_time)
+ORDER BY report_date DESC
+        """
+    },
+
     'power_user_identification': {
         'description': '활발한 사용자 식별 (쿼리 빈도 기준)',
         'use_case': '가장 많이 사용하는 사용자 그룹 파악',

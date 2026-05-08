@@ -219,7 +219,10 @@ class NLQAgent:
                 cost_status, cost_message = "unknown", "비용 추정 실패"
             else:
                 cost_estimate = cost_result.data
+                # dry-run에서는 bytes_billed가 0일 수 있으므로 bytes_processed 사용
                 bytes_billed = cost_estimate.get("bytes_billed", 0)
+                if bytes_billed == 0:
+                    bytes_billed = cost_estimate.get("bytes_processed", 0)
                 cost_status, cost_message = self._estimate_cost(bytes_billed)
                 logger.info(
                     f"비용 추정: {bytes_billed / (1024**3):.2f}GB, "

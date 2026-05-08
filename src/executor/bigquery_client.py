@@ -172,6 +172,7 @@ class BigQueryExecutor:
                 job_config = bigquery.QueryJobConfig(
                     use_legacy_sql=False,
                     dry_run=True,
+                    use_query_cache=False,  # 캐시 비활성화: 실제 스캔량 측정
                     priority=bigquery.QueryPriority.INTERACTIVE,
                 )
 
