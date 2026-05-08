@@ -102,8 +102,8 @@ class SQLGenerator:
             user_query=user_query[:100], max_retries=max_retries, reflection=with_reflection
         )
 
+        # P3: ContextBuilder가 단일 진입점. 시스템+컨텍스트+질문을 모두 포함한 프롬프트 생성
         prompt = self.context_builder.build_prompt(user_query)
-        system_prompt = self.context_builder.get_system_prompt()
 
         for attempt in range(max_retries):
             try:
@@ -116,11 +116,10 @@ class SQLGenerator:
                     )
                     time.sleep(wait_time)
 
-                # LLM 호출 (OpenAI 호환 클라이언트)
+                # P3: 단순화된 LLM 호출. 프롬프트가 이미 완전함
                 response = self.client.chat.completions.create(
                     model=self.config.model,
                     messages=[
-                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=self.config.temperature,
@@ -200,8 +199,26 @@ class SQLGenerator:
    - 구독 조인 시 시간 범위 포함? (date(event_time) >= start_date AND ...)
    - user_id 타입 일치? (STRING vs INTEGER)
 
-5. GROUP BY가 의미 있는가?
+5. 질문의 수량/순서 표현이 SQL에 반영되었는가?
+   - "가장 많이/적게" 표현 → ORDER BY DESC/ASC + LIMIT 1이 있는가?
+   - "TOP N" 표현 → LIMIT N이 있는가?
+   - "평균/합계" 표현 → AVG/SUM이 있는가?
+   - "몇 명" → COUNT(DISTINCT user_id)가 있는가?
+
+6. GROUP BY가 의미 있는가?
    - 1행 결과면 의도와 맞는지? (집계 쿼리 vs 상세 쿼리)
+
+7. 질문에 "credit" 또는 "크레딧"이 있는가? → 데이터 소스 재확인!
+   - ❌ EVENTS_296805에서 credit 필드 추출 시도? (필드 없음, 금지)
+   - ✓ agent_credit_usage_log 사용? (유일한 정답 소스)
+   - ✓ delta_amount < 0 필터? (음수만 = 사용량)
+   - ✓ INNER JOIN으로 조인? (WHERE IN 금지, BigQuery 바이트 제한 위험)
+
+8. BigQuery 최적화 체크:
+   - ✓ EVENTS_296805 쿼리에 파티션 필터 있는가? (DATE(_PARTITIONTIME) 또는 DATE(event_time) 범위 지정)
+   - ✓ 같은 테이블을 여러 번 읽는 CTE 구조는 없는가? (base CTE로 한 번에 통합)
+   - ✓ 필터 순서가 효율적인가? (WHERE에서 조기 필터링, HAVING 최소화)
+   - ✓ 불필요한 JOIN이나 서브쿼리는 없는가? (WHERE IN은 최후의 수단)
 
 응답은 JSON만 반환하세요 (다른 텍스트 없음):
 {{"correct": true/false, "issues": ["문제점 목록"], "corrected_sql": "수정된 SQL 또는 빈 문자열"}}
@@ -291,13 +308,13 @@ class SQLGenerator:
         self,
         user_query: str,
         validator,
-        bq_executor,
+        bq_executor=None,
         max_attempts: int = 3,
     ) -> Result[SQL]:
         """
-        Self-Correction 파이프라인: 생성 → Self-Reflection → 검증 → Dry-Run
+        Self-Correction 파이프라인: 생성 → Self-Reflection → 검증 → Dry-Run → 비용 검증
 
-        4단계 검증으로 의미적, 문법적, 실행 가능성을 모두 검사합니다.
+        5단계 검증으로 의미적, 문법적, 실행 가능성, 비용을 모두 검사합니다.
 
         단계:
         1. [생성] LLM으로 SQL 생성
@@ -305,11 +322,12 @@ class SQLGenerator:
            - 잘못된 테이블 선택, 누락된 필터, JOIN 조건 오류 감지
         3. [정적 검증] regex 기반 문법 검증
         4. [Dry-Run] BigQuery로 실행 가능성 확인
+        5. [비용 검증] 1TB 이상이면 파티션 필터 제안 후 재생성
 
         Args:
             user_query: 사용자 자연어 쿼리
             validator: SQLValidator 인스턴스
-            bq_executor: BigQueryExecutor 인스턴스 (dry_run 메서드 필요)
+            bq_executor: BigQueryExecutor 인스턴스 (dry_run 메서드 필요, 선택)
             max_attempts: 최대 재시도 횟수
 
         Returns:
@@ -321,13 +339,15 @@ class SQLGenerator:
         previous_error = None
 
         for attempt in range(max_attempts):
-            # [1] SQL 생성
+            # [1] SQL 생성 (에러 피드백 포함)
             augmented_query = user_query
             if attempt > 0 and previous_error:
                 augmented_query = (
                     f"{user_query}\n\n"
-                    f"이전 시도 SQL: {previous_sql}\n"
-                    f"문제: {previous_error}"
+                    f"[이전 시도 실패]\n"
+                    f"SQL: {previous_sql}\n\n"
+                    f"문제: {previous_error}\n\n"
+                    f"위 문제를 해결한 새로운 SQL을 생성하세요."
                 )
 
             logger.info(f"[{attempt + 1}/{max_attempts}] SQL 생성 중...")
@@ -337,6 +357,7 @@ class SQLGenerator:
                 logger.warning(f"SQL 생성 실패: {gen_result.error}")
                 if attempt == max_attempts - 1:
                     return gen_result
+                previous_error = f"생성 실패: {gen_result.error}"
                 continue
 
             sql = gen_result.data
@@ -347,7 +368,7 @@ class SQLGenerator:
                 is_correct, result = self._self_reflect(user_query, sql)
                 if not is_correct:
                     previous_sql = sql
-                    previous_error = f"Self-reflection 문제: {result}"
+                    previous_error = f"Self-reflection: {result}"
                     logger.warning(previous_error)
                     if attempt < max_attempts - 1:
                         continue
@@ -369,36 +390,59 @@ class SQLGenerator:
                 if not validation_result.valid:
                     previous_sql = sql
                     error_text = "; ".join(validation_result.errors)
-                    previous_error = f"정적 검증 실패: {error_text}"
+                    previous_error = f"검증 실패: {error_text}"
                     logger.warning(previous_error)
                     if attempt < max_attempts - 1:
                         continue
                     return Result.failure(previous_error)
             except Exception as e:
-                logger.exception(f"정적 검증 중 오류: {str(e)}")
+                logger.exception(f"검증 중 오류: {str(e)}")
                 if attempt == max_attempts - 1:
                     return Result.failure(f"검증 오류: {str(e)}")
+                previous_error = f"검증 오류: {str(e)}"
                 continue
 
-            # [4] Dry-Run: BigQuery 실행 가능성 확인
-            logger.info(f"[{attempt + 1}/{max_attempts}] Dry-Run 중...")
-            try:
-                dry_run_result = bq_executor.dry_run(sql)
-                if not dry_run_result.is_success():
-                    previous_sql = sql
-                    previous_error = f"Dry-Run 실패: {dry_run_result.error}"
-                    logger.warning(previous_error)
-                    if attempt < max_attempts - 1:
-                        continue
-                    return dry_run_result
-            except Exception as e:
-                logger.exception(f"Dry-Run 중 오류: {str(e)}")
-                if attempt == max_attempts - 1:
-                    return Result.failure(f"Dry-Run 오류: {str(e)}")
-                continue
+            # [4] Dry-Run: BigQuery 실행 가능성 + 비용 검증
+            if bq_executor:
+                logger.info(f"[{attempt + 1}/{max_attempts}] Dry-Run 중...")
+                try:
+                    dry_run_result = bq_executor.dry_run(sql)
+                    if not dry_run_result.is_success():
+                        previous_sql = sql
+                        previous_error = f"Dry-Run 실패: {dry_run_result.error}"
+                        logger.warning(previous_error)
+                        if attempt < max_attempts - 1:
+                            continue
+                        return dry_run_result
+
+                    # [5] 비용 검증: 1TB 초과 시 자동 수정 제안
+                    cost_data = dry_run_result.data
+                    bytes_billed = cost_data.get("bytes_billed", 0)
+
+                    if bytes_billed > 1024 ** 4:  # 1TB
+                        gb_billed = bytes_billed / (1024 ** 3)
+                        previous_sql = sql
+                        previous_error = (
+                            f"쿼리가 {gb_billed:.0f}GB 스캔 예상 (1TB 초과). "
+                            f"DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL ...) "
+                            f"형식으로 파티션 필터를 추가하거나 기간을 좁혀주세요."
+                        )
+                        logger.warning(previous_error)
+                        if attempt < max_attempts - 1:
+                            continue
+                        return Result.failure(previous_error)
+
+                    logger.info(f"비용 검증 통과: {bytes_billed / (1024**3):.2f}GB")
+
+                except Exception as e:
+                    logger.exception(f"Dry-Run 중 오류: {str(e)}")
+                    if attempt == max_attempts - 1:
+                        return Result.failure(f"Dry-Run 오류: {str(e)}")
+                    previous_error = f"Dry-Run 오류: {str(e)}"
+                    continue
 
             # 모든 검증 통과
-            logger.info(f"✓ SQL 생성 완료 (시도 {attempt + 1}, 모든 검증 통과)")
+            logger.info(f"✓ SQL 생성 완료 (시도 {attempt + 1}/{max_attempts}, 모든 검증 통과)")
             return Result.success(sql)
 
         return Result.failure(
@@ -409,67 +453,123 @@ class SQLGenerator:
         self,
         user_query: str,
         validator,
-        max_generation_attempts: int = 3,
-        max_validation_attempts: int = 2,
+        bq_executor=None,
+        max_retries: int = 3,
     ) -> Result[SQL]:
         """
-        레거시: 검증과 함께 SQL 생성 (self-reflection 미포함)
+        Self-Correct 루프: 생성 → 정적 검증 → 비용 검증 → 피드백 재생성
 
-        → generate_with_self_correction을 권장합니다.
+        검증 실패 시 에러를 LLM에 피드백하여 자동으로 재생성합니다.
+        self-reflection은 포함하지 않고 빠른 반복 위주.
+
+        단계:
+        1. LLM으로 SQL 생성
+        2. 정적 검증 (테이블, 컬럼, 문법)
+        3. Dry-Run 비용 검증 (1TB 초과 차단)
+        4. 실패 시 에러 피드백하여 재생성 (최대 3회)
 
         Args:
-            user_query: 사용자 쿼리
+            user_query: 사용자의 자연어 쿼리
             validator: SQLValidator 인스턴스
-            max_generation_attempts: 생성 재시도 횟수
-            max_validation_attempts: 검증 실패 시 재시도 횟수
+            bq_executor: BigQueryExecutor 인스턴스 (dry_run 메서드 필요, 선택)
+            max_retries: 최대 재시도 횟수
 
         Returns:
-            검증된 SQL 또는 에러
+            검증 완료된 SQL 또는 에러
         """
-        logger.set_context(user_query=user_query[:100])
+        logger.set_context(user_query=user_query[:100], pipeline="validation_loop")
 
-        for validation_attempt in range(max_validation_attempts):
-            # SQL 생성
-            current_query = user_query
-            if validation_attempt > 0:
-                # 이전 SQL과 에러를 피드백으로 포함 (축적 방지)
+        last_error = None
+        last_sql = None
+
+        for attempt in range(max_retries):
+            # [1] SQL 생성 (첫 시도 또는 에러 피드백 포함)
+            if attempt == 0:
+                current_query = user_query
+            else:
                 current_query = (
                     f"{user_query}\n\n"
-                    f"이전 SQL 시도: {previous_sql}\n\n"
-                    f"오류: {previous_errors}"
+                    f"[이전 시도 실패]\n"
+                    f"문제: {last_error}\n\n"
+                    f"위 문제를 해결한 새로운 SQL을 생성하세요."
                 )
 
-            gen_result = self.generate(current_query, max_retries=max_generation_attempts, with_reflection=False)
+            logger.info(f"[시도 {attempt + 1}/{max_retries}] SQL 생성 중...")
+            gen_result = self.generate(current_query, max_retries=2, with_reflection=False)
 
             if not gen_result.is_success():
-                return gen_result
+                logger.warning(f"SQL 생성 실패: {gen_result.error}")
+                if attempt == max_retries - 1:
+                    return gen_result
+                last_error = f"생성 실패: {gen_result.error}"
+                continue
 
             sql = gen_result.data
 
-            # SQL 검증
+            # [2] 정적 검증
+            logger.info(f"[시도 {attempt + 1}/{max_retries}] 검증 중...")
             try:
-                validation_result = validator.validate(sql)
+                validation_result = validator.validate(sql, user_query=user_query)
 
-                if validation_result.valid:
-                    logger.info("SQL 검증 통과")
-                    return Result.success(sql)
-
-                # 검증 실패 시 피드백으로 재생성
-                if validation_attempt < max_validation_attempts - 1:
-                    errors_text = "; ".join(validation_result.errors)
-                    logger.warning(f"검증 실패 (시도 {validation_attempt + 1}/{max_validation_attempts}): {errors_text}")
-
-                    # 다음 시도를 위해 저장
-                    previous_sql = sql
-                    previous_errors = errors_text
-                    continue
-
-                # 최종 재시도도 실패
-                error_text = "; ".join(validation_result.errors)
-                return Result.failure(f"검증 실패: {error_text}")
+                if not validation_result.valid:
+                    last_sql = sql
+                    last_error = "; ".join(validation_result.errors)
+                    logger.warning(f"검증 실패: {last_error}")
+                    if attempt < max_retries - 1:
+                        continue
+                    return Result.failure(f"검증 실패: {last_error}")
 
             except Exception as e:
                 logger.exception(f"검증 중 오류: {str(e)}")
-                return Result.failure(f"검증 중 오류: {str(e)}")
+                if attempt == max_retries - 1:
+                    return Result.failure(f"검증 오류: {str(e)}")
+                last_error = f"검증 오류: {str(e)}"
+                continue
 
-        return Result.failure("최대 재시도 횟수 초과")
+            # [3] 비용 검증 (dry_run)
+            if bq_executor:
+                logger.info(f"[시도 {attempt + 1}/{max_retries}] 비용 검증 중...")
+                try:
+                    cost_result = bq_executor.dry_run(sql)
+
+                    if cost_result.is_success():
+                        bytes_billed = cost_result.data.get("bytes_billed", 0)
+
+                        # 1TB 초과 시 재생성 요청
+                        if bytes_billed > 1024 ** 4:
+                            gb_billed = bytes_billed / (1024 ** 3)
+                            last_sql = sql
+                            last_error = (
+                                f"쿼리가 {gb_billed:.0f}GB 스캔 예상 (1TB 초과). "
+                                f"DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL ...) "
+                                f"형식으로 파티션 필터를 추가하거나 조회 기간을 좁혀주세요. "
+                                f"또는 더 구체적인 필터(예: liner_product='write')를 추가하세요."
+                            )
+                            logger.warning(last_error)
+                            if attempt < max_retries - 1:
+                                continue
+                            return Result.failure(last_error)
+
+                        logger.info(f"비용 검증 통과: {bytes_billed / (1024**3):.2f}GB")
+
+                    else:
+                        logger.warning(f"Dry-Run 실패: {cost_result.error}")
+                        if attempt == max_retries - 1:
+                            return cost_result
+                        last_error = f"비용 검증 실패: {cost_result.error}"
+                        continue
+
+                except Exception as e:
+                    logger.exception(f"비용 검증 중 오류: {str(e)}")
+                    if attempt == max_retries - 1:
+                        return Result.failure(f"비용 검증 오류: {str(e)}")
+                    last_error = f"비용 검증 오류: {str(e)}"
+                    continue
+
+            # 모든 검증 통과
+            logger.info(f"✓ SQL 생성 완료 (시도 {attempt + 1}/{max_retries})")
+            return Result.success(sql)
+
+        return Result.failure(
+            f"최대 재시도 횟수({max_retries}) 초과. 마지막 에러: {last_error or '원인 미상'}"
+        )

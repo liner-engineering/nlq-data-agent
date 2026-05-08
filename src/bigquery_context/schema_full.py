@@ -11,6 +11,12 @@ BIGQUERY_SCHEMA = {
         'row_count_estimate': '~500M (2025년 기준)',
         'update_frequency': 'Real-time',
         'date_range': '2024-01-01 ~ present',
+        'partitioning': {
+            'column': 'event_time',
+            'type': 'DAY',
+            'required': True,
+            'note': '파티션 필터 필수! 없으면 ~500M rows 전체 스캔 (비용 폭발, 3TB+ 바이트 청구)'
+        },
         'not_for': [
             '결제 금액/구독 상태 분석 — like.fct_moon_subscription 사용',
             '메시지 텍스트 분석 — light.fct_question_answer_binding_message 사용',
@@ -44,33 +50,34 @@ BIGQUERY_SCHEMA = {
                 'nullable': True,
                 'role': 'SEMI_STRUCTURED',
                 'description': '이벤트 속성 (JSON 형식)',
+                'note': '★ JSON 필드는 JSON_EXTRACT_SCALAR() 필수. SAFE_CAST 사용 권장.',
                 'important_keys': {
+                    'liner_product': {
+                        'type': 'string',
+                        'description': '★ 제품명 (CRITICAL: 제품 필터링 필수 필드)',
+                        'examples': ['write', 'researcher', 'ai_search', 'browser_extension'],
+                        'note': '★ 제품 필터링은 반드시 이 필드 사용. "service", "product" 필드는 없음!',
+                        'extraction': 'JSON_EXTRACT_SCALAR(event_properties, \'$.liner_product\')'
+                    },
                     'query': {
                         'type': 'string',
-                        'description': '사용자가 입력한 쿼리 텍스트 (검색 키워드)',
+                        'description': '사용자가 입력한 쿼리 텍스트 (검색 키워드/의도 분석용)',
                         'examples': [
                             '이력서 첨삭 부탁합니다',
                             '영문 자기소개서 작성법',
-                            '취업 면접 팁',
-                            '이력서 레이아웃'
+                            '취업 면접 팁'
                         ],
-                        'use_case': '쿼리 내용으로 사용자를 분류 (교육/취업/카테고리별)'
+                        'note': '★ 쿼리 텍스트로 user segment 분류하려면 mart 테이블 사용. LIKE 매칭 금지!',
+                        'extraction': 'JSON_EXTRACT_SCALAR(event_properties, \'$.query\')'
                     },
                     'status': {
                         'type': 'string',
                         'description': '쿼리 처리 상태',
-                        'examples': ['completed', 'pending', 'failed']
-                    },
-                    'liner_product': {
-                        'type': 'string',
-                        'description': '★ 반드시 사용하는 제품 필드 (MANDATORY)',
-                        'examples': ['write', 'researcher', 'ai_search', 'browser_extension'],
-                        'note': '제품 필터링은 항상 이 필드를 사용. "service" 필드는 없음!',
-                        'extraction': 'JSON_EXTRACT_SCALAR(event_properties, "$.liner_product")'
+                        'examples': ['completed', 'pending', 'failed'],
+                        'extraction': 'JSON_EXTRACT_SCALAR(event_properties, \'$.status\')'
                     }
                 },
-                'extraction_example': 'JSON_EXTRACT_SCALAR(event_properties, "$.query")',
-                'critical_note': 'query 내용으로 사용자 세그멘트 판별. 제품 필터링은 반드시 liner_product 필드만 사용!'
+                'critical_note': '제품 필터링 = liner_product 필드 필수. 세그먼트 분류 = mart 테이블 사용 (LIKE 금지).'
             },
             'event_time': {
                 'type': 'TIMESTAMP',
@@ -95,19 +102,19 @@ BIGQUERY_SCHEMA = {
         },
         'critical_pattern': {
             'description': 'make_chat 이벤트로 사용자 세그먼트 분석하는 방법',
-            'example_query': '''
-SELECT
-  COUNT(DISTINCT user_id) as user_count,
-  ROUND(100 * COUNT(DISTINCT user_id) / (SELECT COUNT(DISTINCT user_id)
-    FROM `liner-219011.analysis.EVENTS_296805`
-    WHERE event_type = 'make_chat' AND DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)), 2) as percentage
-FROM `liner-219011.analysis.EVENTS_296805`
-WHERE event_type = 'make_chat'
-  AND DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-  AND LOWER(JSON_EXTRACT_SCALAR(event_properties, '$.query'))
-    LIKE '%이력서%' OR LOWER(JSON_EXTRACT_SCALAR(event_properties, '$.query')) LIKE '%취업%'
+            'method': '''
+⚠️ 사용자 segment 분석은 반드시 사전 분류된 mart 테이블을 사용하세요!
+
+1. LIKE 매칭 금지: query 텍스트에 LIKE를 사용하면 안 됩니다
+2. mart 테이블 필수: user_category, user_segment 등 사전 분류 테이블 JOIN
+3. mart 테이블 없으면: 그 사실을 명시하고 작업 중단
+
+마트 테이블이 없으면 다음과 같이 응답하세요:
+"사용자 세그먼트 분석을 위해서는 <테이블명> mart 테이블이 필요합니다.
+현재 스키마에서 사용 가능한 segment 정보가 없으므로,
+데이터 팀에 문의하거나 mart 테이블 생성을 요청하세요."
             ''',
-            'description': '교육/취업 관련 쿼리를 한 사용자 수 계산'
+            'pattern_note': '쿼리 텍스트 기반 segment 분석 = LIKE 매칭으로는 부정확함 → mart 테이블 사용'
         }
     },
 

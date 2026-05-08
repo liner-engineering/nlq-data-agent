@@ -8,115 +8,6 @@ LLM이 참고할 수 있는 실제 작동하는 쿼리들
 """
 
 SUCCESSFUL_QUERIES = {
-    'keyword_based_segmentation': {
-        'description': '키워드 기반 사용자 세그먼트 분석',
-        'use_case': '특정 주제(예: 교육, 취업)에 관심 있는 사용자 수',
-        'sql': """
--- 취업/이력서 관련 쿼리를 한 사용자 수
-SELECT
-  COUNT(DISTINCT user_id) as career_interested_users,
-  ROUND(100.0 * COUNT(DISTINCT user_id) /
-    (SELECT COUNT(DISTINCT user_id) FROM `liner-219011.analysis.EVENTS_296805`
-     WHERE event_type = 'make_chat' AND DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)), 2) as percentage
-FROM `liner-219011.analysis.EVENTS_296805`
-WHERE event_type = 'make_chat'
-  AND DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-  AND (LOWER(JSON_EXTRACT_SCALAR(event_properties, '$.query')) LIKE '%이력서%'
-    OR LOWER(JSON_EXTRACT_SCALAR(event_properties, '$.query')) LIKE '%취업%'
-    OR LOWER(JSON_EXTRACT_SCALAR(event_properties, '$.query')) LIKE '%면접%'
-    OR LOWER(JSON_EXTRACT_SCALAR(event_properties, '$.query')) LIKE '%resume%'
-    OR LOWER(JSON_EXTRACT_SCALAR(event_properties, '$.query')) LIKE '%career%')
-        """
-    },
-
-    'query_category_distribution': {
-        'description': '사용자들의 쿼리 카테고리별 분포',
-        'use_case': '어떤 주제의 쿼리가 가장 많은지 파악',
-        'sql': """
--- 쿼리 주제별 사용자 수
-SELECT
-  CASE
-    WHEN LOWER(query_text) LIKE '%이력서%' OR LOWER(query_text) LIKE '%resume%' THEN 'Career: Resume'
-    WHEN LOWER(query_text) LIKE '%취업%' OR LOWER(query_text) LIKE '%면접%' THEN 'Career: Job/Interview'
-    WHEN LOWER(query_text) LIKE '%영어%' OR LOWER(query_text) LIKE '%영문%' THEN 'Language'
-    WHEN LOWER(query_text) LIKE '%report%' OR LOWER(query_text) LIKE '%레포트%' THEN 'Academic: Report'
-    ELSE 'Other'
-  END as query_category,
-  COUNT(DISTINCT user_id) as user_count,
-  COUNT(*) as total_queries
-FROM (
-  SELECT
-    user_id,
-    JSON_EXTRACT_SCALAR(event_properties, '$.query') as query_text
-  FROM `liner-219011.analysis.EVENTS_296805`
-  WHERE event_type = 'make_chat'
-    AND DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-)
-WHERE query_text IS NOT NULL
-GROUP BY query_category
-ORDER BY user_count DESC
-        """
-    },
-
-    'user_segment_retention': {
-        'description': '쿼리 주제별 사용자의 D+7 리텐션',
-        'use_case': '어떤 관심사의 사용자들이 더 오래 머물러 있을까?',
-        'sql': """
--- 취업 관심 사용자 vs 다른 사용자의 리텐션 비교
-WITH user_segments AS (
-  SELECT DISTINCT
-    user_id,
-    CASE
-      WHEN LOWER(query_text) LIKE '%이력서%' OR LOWER(query_text) LIKE '%취업%'
-        OR LOWER(query_text) LIKE '%면접%' THEN 'Career'
-      ELSE 'Other'
-    END as segment
-  FROM (
-    SELECT
-      user_id,
-      JSON_EXTRACT_SCALAR(event_properties, '$.query') as query_text
-    FROM `liner-219011.analysis.EVENTS_296805`
-    WHERE event_type = 'make_chat'
-      AND DATE(event_time) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 37 DAY)
-                              AND DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
-  )
-),
-user_activity AS (
-  SELECT
-    user_id,
-    MIN(DATE(event_time)) as first_date,
-    COUNT(*) as total_events
-  FROM `liner-219011.analysis.EVENTS_296805`
-  WHERE event_type = 'make_chat'
-  GROUP BY user_id
-),
-retention_check AS (
-  SELECT
-    us.segment,
-    us.user_id,
-    ua.first_date,
-    MAX(CASE
-      WHEN DATE(e.event_time) BETWEEN DATE_ADD(ua.first_date, INTERVAL 7 DAY)
-                                   AND DATE_ADD(ua.first_date, INTERVAL 13 DAY)
-      THEN 1 ELSE 0
-    END) as retained_d7
-  FROM user_segments us
-  JOIN user_activity ua ON us.user_id = ua.user_id
-  LEFT JOIN `liner-219011.analysis.EVENTS_296805` e ON us.user_id = e.user_id
-    AND e.event_type = 'make_chat'
-    AND DATE(e.event_time) != ua.first_date
-  GROUP BY us.segment, us.user_id, ua.first_date
-)
-SELECT
-  segment,
-  COUNT(DISTINCT user_id) as total_users,
-  SUM(retained_d7) as retained_users,
-  ROUND(100.0 * SUM(retained_d7) / COUNT(DISTINCT user_id), 2) as retention_rate_pct
-FROM retention_check
-GROUP BY segment
-        """
-    },
-
     'power_user_identification': {
         'description': '활발한 사용자 식별 (쿼리 빈도 기준)',
         'use_case': '가장 많이 사용하는 사용자 그룹 파악',
@@ -148,42 +39,38 @@ ORDER BY user_count DESC
     },
 
     'write_user_credit_usage': {
-        'description': 'Write 서비스 사용자의 credit 사용량 (서비스별 분석)',
-        'use_case': 'Write 유저 중 credit을 가장 많이 사용한 사람',
+        'description': 'Write 서비스 사용자의 credit 사용량 (최적화된 버전)',
+        'use_case': 'Write 유저 중 credit을 가장 많이 사용한 사람 TOP 10',
         'comment': """
 -- 의사결정 경로:
--- 1. "write 유저" = liner_product='write' 필터로 정의
--- 2. "credit 사용" = 이벤트 내용이 아니라 agent_credit_usage_log 테이블 필수
--- 3. 절대 금지: LIKE '%credit%'로 query 텍스트 검색 (틀린 데이터)
--- 4. 올바른 패턴: 집합 정의(CTE) → 데이터 테이블 조인 → 집계
+-- 1. "write 유저" = EVENTS_296805 + liner_product='write' 필터
+-- 2. "credit 사용" = agent_credit_usage_log (delta_amount < 0만)
+-- 3. 파티션 필터: DATE(event_time) 범위 지정 (BigQuery 비용 절감)
+-- 4. 최적화: base CTE로 한 번에 처리 (중복 스캔 제거)
+-- 5. 필터 순서: WHERE에서 조기 필터링, HAVING으로 0값 제거
         """,
         'sql': """
--- Step 1: Write 유저 집합 정의 (최근 30일)
-WITH write_users AS (
-  SELECT DISTINCT user_id
-  FROM `liner-219011.analysis.EVENTS_296805`
-  WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'write'
-    AND DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-),
-
--- Step 2: 각 write 유저의 total credit 사용량
-write_user_credit_usage AS (
+-- base CTE: 한 번에 필요한 컬럼만 추출 (파티션 필터 포함)
+WITH base AS (
   SELECT
-    wu.user_id,
-    COALESCE(SUM(acul.credit_used), 0) AS total_credit_used
-  FROM write_users wu
-  LEFT JOIN `liner-219011.agent_credit_usage_log` acul
-    ON wu.user_id = acul.user_id
-  GROUP BY wu.user_id
+    SAFE_CAST(user_id AS INT64) AS user_id,
+    JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') AS liner_product
+  FROM `liner-219011.analysis.EVENTS_296805`
+  WHERE DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)  -- 파티션 필터 (event_time으로 파티셔닝됨)
+    AND event_type = 'make_chat'
 )
 
--- Step 3: 가장 많이 사용한 유저 (1명)
+-- write_users: base CTE에서 write 사용자 추출
 SELECT
-  user_id,
-  total_credit_used
-FROM write_user_credit_usage
+  acul.user_id,
+  SUM(-acul.delta_amount) AS total_credit_used
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acul
+WHERE acul.user_id IN (SELECT DISTINCT user_id FROM base WHERE liner_product = 'write')
+  AND acul.delta_amount < 0
+GROUP BY acul.user_id
+HAVING total_credit_used > 0
 ORDER BY total_credit_used DESC
-LIMIT 1
+LIMIT 10
         """
     }
 }
@@ -192,14 +79,14 @@ LIMIT 1
 CONTEXT_NOTES = {
     'critical': [
         'make_chat은 사용자가 query를 남긴 행동 기록이다',
-        'query 내용(event_properties.$.query)으로 사용자 의도를 파악한다',
-        '예: 이력서/취업 관련 쿼리 → "취업 관심 사용자" 라고 분류',
+        'user_segment 분석: LIKE 매칭 금지, 사전 분류 mart 테이블 사용',
+        'mart 테이블이 없으면 그 사실을 명시하고 작업 중단',
         'user_id는 like.dim_user와 조인 가능 (사용자 속성 추가)',
     ],
     'anti_patterns': [
         '❌ 틀림: "sector라는 컬럼에서 professional 값 찾기" → sector 컬럼 없음',
         '❌ 틀림: "event_properties.sector" → 없는 필드',
-        '✓ 올바름: "query 내용의 키워드로 사용자 분류"',
-        '✓ 올바름: "LIKE 또는 REGEX로 query_text 필터링"',
+        '❌ 틀림: "LIKE로 query_text 필터링하여 segment 판별" → 부정확, mart 테이블 사용',
+        '✓ 올바름: "사전 분류된 mart 테이블 JOIN으로 segment 분류"',
     ]
 }

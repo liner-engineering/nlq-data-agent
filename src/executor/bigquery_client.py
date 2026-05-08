@@ -152,6 +152,49 @@ class BigQueryExecutor:
             logger.error(f"BigQuery 연결 테스트 실패: {str(e)}")
             return False
 
+    def dry_run(self, sql: str) -> Result[dict[str, int]]:
+        """
+        SQL의 bytes_billed 비용 추정 (dry_run)
+
+        Args:
+            sql: BigQuery SQL
+
+        Returns:
+            {'bytes_processed': int, 'bytes_billed': int} 또는 에러
+        """
+        if not sql or not sql.strip():
+            return Result.failure("SQL이 비어있습니다")
+
+        logger.set_context(sql=sql[:100])
+
+        try:
+            with perf_logger.timer("bq_dry_run"):
+                job_config = bigquery.QueryJobConfig(
+                    use_legacy_sql=False,
+                    dry_run=True,
+                    priority=bigquery.QueryPriority.INTERACTIVE,
+                )
+
+                query_job = self.client.query(sql, job_config=job_config, timeout=10)
+
+                bytes_processed = query_job.total_bytes_processed or 0
+                bytes_billed = query_job.total_bytes_billed or 0
+
+                logger.info(
+                    f"Dry run: {bytes_processed:,} bytes processed, "
+                    f"{bytes_billed:,} bytes billed"
+                )
+
+                return Result.success({
+                    "bytes_processed": bytes_processed,
+                    "bytes_billed": bytes_billed,
+                })
+
+        except Exception as e:
+            error_msg = f"Dry run 실패: {str(e)}"
+            logger.error(error_msg)
+            return Result.failure(error_msg)
+
     def get_table_schema(self, table_id: str) -> dict[str, str] | None:
         """
         테이블 스키마 조회

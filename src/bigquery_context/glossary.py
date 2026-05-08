@@ -14,30 +14,36 @@
 GLOSSARY = {
     'credit': {
         'alternative_terms': ['크레딧', '사용량', '구매', 'usage'],
-        'description': '크레딧: Write/Research 서비스에서 사용자가 소비하는 단위. 구매(payment)와 사용(usage)을 구분.',
+        'description': '크레딧: Write/Research 서비스에서 사용자가 소비하는 단위. 사용(usage)은 agent_credit_usage_log에서 delta_amount < 0으로 추적.',
         'primary_source': [
-            '사용량: agent_credit_usage_log (직접)',
-            '구매액: payment_v2_item_purchase (구독과 분리)'
+            '사용량: cdc_service_db_new_liner.agent_credit_usage_log (delta_amount < 0)',
+            '제품 필터: EVENTS_296805에서 make_chat + liner_product로 제품별 사용자 정의'
         ],
-        'secondary_source': 'EVENTS_296805 (의도/퍼널 보조, 쿼리 내용은 신뢰X)',
+        'secondary_source': 'agent_credit_item (상세 항목 정보, 필요시)',
         'time_range': '⚠️ 기간 제한 불가: credit은 누적 지표이므로 기간 없음 권장. 시계열이 필요하면 명시.',
         'anti_patterns': [
             "LIKE '%credit%' in JSON_EXTRACT(event_properties, '$.query')",
-            "event_type = 'make_chat' 기반 필터링 (쿼리 텍스트 검색)",
-            "fct_moon_subscription만 사용 (구독≠크레딧 사용)",
-            "자동으로 DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) 필터 추가 (원본 데이터 필요)"
+            "event_type = 'complete_use_credit' 사용 (EVENTS의 크레딧 이벤트는 신뢰X)",
+            "agent_credit_usage_log만 사용해서 제품 정보 손실 (EVENTS 조인 필요)",
+            "자동으로 DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) 필터 추가 (누적 지표는 전체 기간)"
         ],
         'routing_rule': """
         credit 질문 →
-          1. "사용량 TOP" → agent_credit_usage_log 직접 조회 (기간 없음)
-          2. "구매/결제" → payment_v2_item_purchase 조회 (기간 없음)
-          3. "추이/시계열" → usage_log 또는 payment 시계열 (명시적 기간)
-          4. EVENTS는 "어떤 제품을 사용 중인가?"의 보조만
-          5. ⚠️ 기간이 없으면 전체 데이터 사용 (30일 자동 추가 금지!)
+          1. "Write/Scholar 사용자의 credit 사용" →
+             Step 1: EVENTS_296805 + (event_type='make_chat' + liner_product) 정의
+             Step 2: cdc_service_db_new_liner.agent_credit_usage_log JOIN (delta_amount < 0)
+             Step 3: SUM(-delta_amount) 집계
+          2. "사용량 TOP" → GROUP BY user_id + ORDER BY DESC + LIMIT 1
+          3. "기간 제한" → date_trunc(created_at, 'Asia/Seoul') 사용
+          4. ⚠️ 기간이 없으면 전체 데이터 사용 (30일 자동 추가 금지!)
+          5. BigQuery 최적화:
+             - EVENTS 쿼리: DATE(_PARTITIONTIME) 또는 DATE(event_time) 범위 반드시 지정
+             - CTE 구조: base CTE로 한 번에 필요한 컬럼만 추출 (중복 스캔 금지)
+             - 필터 순서: WHERE에서 조기 필터링, HAVING 최소화
         """,
         'example_queries': [
-            '("credit을 가장 많이 사용한 사용자", primary_source + 기간없음)',
-            '("write 유저의 평균 credit 사용량", agent_credit_usage_log + 기간없음)',
+            '("credit을 가장 많이 사용한 사용자", write_users CTE + agent_credit_usage_log 조인 + ORDER BY DESC LIMIT 1)',
+            '("write 유저의 credit 사용량", EVENTS 제품 필터 → agent_credit_usage_log SUM)',
         ]
     },
 
@@ -104,6 +110,25 @@ GLOSSARY = {
         'alternative_terms': ['AI Search', '통합검색', 'ai_search'],
         'description': '통합 검색 서비스.',
         'primary_source': 'EVENTS_296805: JSON_EXTRACT_SCALAR(event_properties, \'$.liner_product\') = \'ai_search\'',
+    },
+
+    'segment': {
+        'alternative_terms': ['세그먼트', '카테고리', '분류', 'category', 'group'],
+        'description': '사용자를 특정 그룹으로 분류 (예: 교육/취업/비즈니스). LIKE 매칭으로는 부정확함.',
+        'primary_source': '사전 분류된 mart 테이블 (user_category, user_segment 등) - 테이블명은 회사 데이터 팀에 확인',
+        'anti_patterns': [
+            '쿼리 텍스트에 LIKE 매칭으로 segment 판별 (부정확, 유지보수 어려움)',
+            'WHERE LOWER(JSON_EXTRACT_SCALAR(event_properties, \'$.query\')) LIKE \'%키워드%\' 패턴 금지',
+            'CASE WHEN ... LIKE ... 로 수동 분류하기'
+        ],
+        'routing_rule': """
+        segment/category 질문 →
+          1. segment mart 테이블이 존재하는가? 확인하기
+             - 존재한다면: INNER JOIN <mart_table> ON user_id
+             - 존재하지 않는다면: "segment 분류 mart 테이블이 필요합니다. 데이터 팀 확인 필요" 응답
+          2. LIKE 매칭으로 분류하기 금지 (정확도 낮음)
+          3. 대신 사전 분류 테이블 JOIN
+        """
     },
 }
 

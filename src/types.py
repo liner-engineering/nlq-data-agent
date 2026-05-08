@@ -162,6 +162,9 @@ class AnalysisResult:
         error: 오류 메시지 (실패 시)
         data_quality: 데이터 품질 정보
         sample_warning: 샘플 크기 경고
+        cost_estimate: 비용 추정 정보 (bytes_processed, bytes_billed)
+        cost_status: 비용 상태 ("ok", "warning", "alert", "blocked")
+        cost_message: 사용자에게 보여줄 비용 메시지
     """
 
     def __init__(
@@ -175,6 +178,9 @@ class AnalysisResult:
         error: str | None = None,
         data_quality: dict[str, Any] | None = None,
         sample_warning: str | None = None,
+        cost_estimate: dict[str, int] | None = None,
+        cost_status: str = "ok",
+        cost_message: str = "",
     ):
         self.query = query
         self.sql = sql
@@ -185,6 +191,9 @@ class AnalysisResult:
         self.error = error
         self.data_quality = data_quality or {}
         self.sample_warning = sample_warning or ""
+        self.cost_estimate = cost_estimate or {}
+        self.cost_status = cost_status
+        self.cost_message = cost_message
 
     def to_dict(self) -> dict[str, Any]:
         """사전으로 변환"""
@@ -198,6 +207,9 @@ class AnalysisResult:
             "error": self.error,
             "data_quality": self.data_quality,
             "sample_warning": self.sample_warning,
+            "cost_estimate": self.cost_estimate,
+            "cost_status": self.cost_status,
+            "cost_message": self.cost_message,
         }
 
     def to_json_serializable(self) -> dict[str, Any]:
@@ -213,6 +225,9 @@ class AnalysisResult:
             "error": self.error,
             "data_quality": self.data_quality,
             "sample_warning": self.sample_warning,
+            "cost_estimate": self.cost_estimate,
+            "cost_status": self.cost_status,
+            "cost_message": self.cost_message,
         }
 
 

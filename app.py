@@ -50,6 +50,24 @@ def get_analysis_agent():
         st.stop()
 
 
+def display_cost_info(result):
+    """비용 정보 표시"""
+    cost_status = getattr(result, 'cost_status', 'unknown')
+    cost_message = getattr(result, 'cost_message', '')
+    cost_estimate = getattr(result, 'cost_estimate', {})
+
+    if cost_estimate and 'bytes_billed' in cost_estimate:
+        gb_billed = cost_estimate['bytes_billed'] / (1024 ** 3)
+        st.markdown(f"**예상 비용**: {gb_billed:.2f} GB (약 ${gb_billed * 6.5 / 1000:.2f})")
+
+    if cost_status == "warning":
+        st.warning(cost_message)
+    elif cost_status == "alert":
+        st.warning(cost_message)
+    elif cost_status == "blocked":
+        st.error(cost_message)
+
+
 def display_results(result):
     """결과 표시"""
     if result.success:
@@ -223,7 +241,7 @@ def main():
                 st.info("예: '섹터별 리텐션 분석', '파워 사용자는 누가 있나요?'")
             else:
                 try:
-                    with st.spinner("SQL 생성 중..."):
+                    with st.spinner("SQL 생성 중 (검증 및 비용 확인 포함)..."):
                         agent = get_agent()
                         from src.query.generator import SQLGenerator
                         from src.query.validator import SQLValidator
@@ -231,13 +249,34 @@ def main():
                         validator = SQLValidator()
                         generator = SQLGenerator(agent.config.llm)
 
-                        # NLQ 탭은 항상 LLM이 SQL 생성 (템플릿 무시)
-                        sql_result = generator.generate_with_validation(query_stripped, validator)
+                        # Self-correction 루프: 생성 → 검증 → 비용 확인 (자동)
+                        sql_result = generator.generate_with_validation(
+                            query_stripped,
+                            validator,
+                            bq_executor=agent.bq_executor,  # 비용 검증 통합
+                            max_retries=3
+                        )
 
                         if sql_result.is_success():
-                            st.session_state.pending_sql = sql_result.data
+                            sql = sql_result.data
+
+                            # 최종 비용 확인
+                            cost_result = agent.bq_executor.dry_run(sql)
+                            if cost_result.is_success():
+                                cost_estimate = cost_result.data
+                                bytes_billed = cost_estimate.get("bytes_billed", 0)
+                                cost_status, cost_message = agent._estimate_cost(bytes_billed)
+                            else:
+                                cost_estimate = {}
+                                cost_status = "unknown"
+                                cost_message = "비용 확인 실패"
+
+                            st.session_state.pending_sql = sql
                             st.session_state.pending_query = query_stripped
-                            st.success("SQL 생성 완료!")
+                            st.session_state.cost_estimate = cost_estimate
+                            st.session_state.cost_status = cost_status
+                            st.session_state.cost_message = cost_message
+                            st.success("SQL 생성 및 검증 완료!")
                         else:
                             st.error(f"SQL 생성 실패: {sql_result.error}")
                 except Exception as e:
@@ -250,62 +289,90 @@ def main():
             st.subheader("생성된 SQL (검토 후 실행하세요)")
             st.code(st.session_state.pending_sql, language="sql")
 
-            col1, col2 = st.columns([1, 4])
+            # 비용 정보 표시
+            cost_status = st.session_state.get("cost_status", "unknown")
+            cost_message = st.session_state.get("cost_message", "")
+            cost_estimate = st.session_state.get("cost_estimate", {})
+
+            if cost_estimate and "bytes_billed" in cost_estimate:
+                gb_billed = cost_estimate["bytes_billed"] / (1024 ** 3)
+                st.info(f"예상 비용: {gb_billed:.2f} GB (약 ${gb_billed * 6.5 / 1000:.2f})")
+
+            if cost_status == "warning" or cost_status == "alert":
+                st.warning(cost_message)
+            elif cost_status == "blocked":
+                st.error(cost_message)
+
+            # 실행 버튼
+            col1, col2, col3 = st.columns([1, 1, 3])
             with col1:
-                confirm_execute = st.button("실행", type="primary", key="nlq_execute")
+                if cost_status == "blocked":
+                    st.button("실행", disabled=True, key="nlq_execute_disabled")
+                    st.caption("비용이 너무 크므로 실행할 수 없습니다")
+                else:
+                    confirm_execute = st.button("실행", type="primary", key="nlq_execute")
+                    if confirm_execute:
+                        try:
+                            with st.spinner("쿼리 실행 중..."):
+                                agent = get_agent()
+                                from src.executor.bigquery_client import BigQueryExecutor
+                                from src.executor.data_processor import DataProcessor
+
+                                # BigQuery 실행
+                                bq_executor = BigQueryExecutor(agent.config.bigquery)
+                                exec_result = bq_executor.execute(
+                                    st.session_state.pending_sql,
+                                    max_results=agent.config.bigquery.max_results
+                                )
+
+                                if not exec_result.is_success():
+                                    st.error(f"쿼리 실행 실패: {exec_result.error}")
+                                else:
+                                    df = exec_result.data
+
+                                    # 데이터 처리
+                                    data_processor = DataProcessor(agent.config.analysis)
+                                    proc_result = data_processor.process(df)
+
+                                    if proc_result.is_success():
+                                        proc_data = proc_result.data
+                                        from src.types import AnalysisResult
+                                        analysis_result = AnalysisResult(
+                                            query=st.session_state.pending_query,
+                                            sql=st.session_state.pending_sql,
+                                            data=proc_data["df_cleaned"],
+                                            stats=proc_data["stats"],
+                                            explanation=proc_data["explanation"],
+                                            success=True,
+                                            data_quality=proc_data["data_quality"],
+                                            sample_warning=proc_data["sample_warning"],
+                                            cost_estimate=cost_estimate,
+                                            cost_status=cost_status,
+                                            cost_message=cost_message,
+                                        )
+                                        display_results(analysis_result)
+
+                                        # 완료 후 상태 초기화
+                                        del st.session_state.pending_sql
+                                        del st.session_state.pending_query
+                                        del st.session_state.cost_estimate
+                                        del st.session_state.cost_status
+                                        del st.session_state.cost_message
+                                    else:
+                                        st.error(f"데이터 처리 실패: {proc_result.error}")
+                        except Exception as e:
+                            st.error(f"예상치 못한 오류: {str(e)}")
+
             with col2:
                 cancel_sql = st.button("취소", key="nlq_cancel")
-
-            if cancel_sql:
-                del st.session_state.pending_sql
-                del st.session_state.pending_query
-                st.rerun()
-
-            if confirm_execute:
-                try:
-                    with st.spinner("쿼리 실행 중..."):
-                        agent = get_agent()
-                        from src.executor.bigquery_client import BigQueryExecutor
-                        from src.executor.data_processor import DataProcessor
-
-                        # BigQuery 실행
-                        bq_executor = BigQueryExecutor(agent.config.bigquery)
-                        exec_result = bq_executor.execute(
-                            st.session_state.pending_sql,
-                            max_results=agent.config.bigquery.max_results
-                        )
-
-                        if not exec_result.is_success():
-                            st.error(f"쿼리 실행 실패: {exec_result.error}")
-                        else:
-                            df = exec_result.data
-
-                            # 데이터 처리
-                            data_processor = DataProcessor(agent.config.analysis)
-                            proc_result = data_processor.process(df)
-
-                            if proc_result.is_success():
-                                proc_data = proc_result.data
-                                from src.types import AnalysisResult
-                                analysis_result = AnalysisResult(
-                                    query=st.session_state.pending_query,
-                                    sql=st.session_state.pending_sql,
-                                    data=proc_data["df_cleaned"],
-                                    stats=proc_data["stats"],
-                                    explanation=proc_data["explanation"],
-                                    success=True,
-                                    data_quality=proc_data["data_quality"],
-                                    sample_warning=proc_data["sample_warning"],
-                                )
-                                display_results(analysis_result)
-
-                                # 완료 후 상태 초기화
-                                del st.session_state.pending_sql
-                                del st.session_state.pending_query
-                            else:
-                                st.error(f"데이터 처리 실패: {proc_result.error}")
-                except Exception as e:
-                    st.error(f"예상치 못한 오류: {str(e)}")
+                if cancel_sql:
+                    del st.session_state.pending_sql
+                    del st.session_state.pending_query
+                    if "cost_estimate" in st.session_state:
+                        del st.session_state.cost_estimate
+                        del st.session_state.cost_status
+                        del st.session_state.cost_message
+                    st.rerun()
 
     # 탭 2: 자동 분석
     with tab2:

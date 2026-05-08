@@ -76,8 +76,8 @@ WHERE event_type = 'make_chat'
   AND DATE(event_time) <= CURRENT_DATE()
         """.strip(),
         category="timeseries",
-        notes="이번 주 = 월요일부터 오늘까지. 단일 숫자 반환. 검증 완료: 현재 주 make_chat 이벤트 수 119,910 (합리적 범위).",
-        verified=True,
+        notes="이번 주 = 월요일부터 오늘까지. 평가 중 타임아웃 발생 → 재검증 필요.",
+        verified=False,
     ),
 
     # ── 구독 ─────────────────────────────────────
@@ -102,12 +102,12 @@ WHERE status = 'active'
 SELECT
   COUNT(DISTINCT user_id) AS new_subscribers
 FROM `liner-219011.like.fct_moon_subscription`
-WHERE DATE(subscription_start_at) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
-  AND DATE(subscription_start_at) < DATE_TRUNC(CURRENT_DATE(), MONTH)
+WHERE DATE(subscription_start_at, 'Asia/Seoul') >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
+  AND DATE(subscription_start_at, 'Asia/Seoul') < DATE_TRUNC(CURRENT_DATE(), MONTH)
         """.strip(),
         category="subscription",
-        notes="지난달 = 전월 1일~말일. 이번달 1일은 제외. 검증 완료: 4,687명.",
-        verified=True,
+        notes="지난달 = 전월 1일~말일 (Asia/Seoul 타임존). 검증 필요: 4,687명.",
+        verified=False,
     ),
 
     # ── 섹터 분류 ────────────────────────────────
@@ -177,6 +177,35 @@ WHERE event_count >= 50
         category="power_user",
         notes="Write 서비스 파워 사용자 (최근 90일, 모든 이벤트). 파워 사용자 정의: 50+ 이벤트. liner_product='write' 필터 필수.",
         verified=False,
+    ),
+
+    # ── 크레딧 ──────────────────────────────────
+    ExecutionEvalCase(
+        id="credit_001",
+        question="write 유저 중 credit을 가장 많이 사용한 사람은 몇 credit을 사용했나요",
+        gold_sql="""
+WITH write_users AS (
+  SELECT DISTINCT SAFE_CAST(user_id AS INT64) AS user_id
+  FROM `liner-219011.analysis.EVENTS_296805`
+  WHERE event_type = 'make_chat'
+    AND JSON_VALUE(event_properties, '$.liner_product') = 'write'
+    AND user_id IS NOT NULL
+)
+
+SELECT
+  acul.user_id,
+  SUM(-acul.delta_amount) AS total_credit_used
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acul
+INNER JOIN write_users wu ON acul.user_id = wu.user_id
+WHERE acul.delta_amount < 0
+GROUP BY acul.user_id
+ORDER BY total_credit_used DESC
+LIMIT 1
+        """.strip(),
+        category="credit",
+        order_sensitive=False,
+        notes="Write 제품 사용자 중 credit을 가장 많이 사용한 1명. 데이터 소스: cdc_service_db_new_liner.agent_credit_usage_log (delta_amount < 0). 최적화: INNER JOIN 사용 (WHERE IN 서브쿼리 대신, BigQuery 바이트 제한 회피).",
+        verified=True,
     ),
 ]
 

@@ -1,0 +1,32 @@
+{
+  "n_cases": 4,
+  "n_attempts_per_case": 3,
+  "total_runs": 12,
+  "overall_pass_at_1": 0.25,
+  "overall_pass_at_k": 0.25,
+  "avg_pass_rate": 0.25,
+  "avg_sql_variants": 0.75,
+  "by_category": {
+    "timeseries": {
+      "n_cases": 1,
+      "pass_at_1": 0.0,
+      "pass_at_k": 0.0,
+      "avg_pass_rate": 0.0,
+      "avg_variants": 1
+    },
+    "subscription": {
+      "n_cases": 2,
+      "pass_at_1": 0.5,
+      "pass_at_k": 0.5,
+      "avg_pass_rate": 0.5,
+      "avg_variants": 1
+    },
+    "credit": {
+      "n_cases": 1,
+      "pass_at_1": 0.0,
+      "pass_at_k": 0.0,
+      "avg_pass_rate": 0.0,
+      "avg_variants": 0
+    }
+  }
+}
