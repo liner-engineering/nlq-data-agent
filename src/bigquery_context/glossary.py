@@ -9,6 +9,12 @@
 2. secondary_source: 보조 지표 (선택)
 3. anti_patterns: 절대 금지 SQL 패턴 (규칙 기반 lint)
 4. routing_rule: LLM이 따를 의사결정 경로
+
+⚠️ 스키마 주의: 테이블마다 user_id 타입이 다릅니다!
+- EVENTS_296805.user_id: STRING
+- fct_moon_subscription.user_id: INTEGER (type casting 필수!)
+- agent_credit_usage_log.user_id: INTEGER
+→ CAST(user_id AS INT64) 또는 CAST(user_id AS STRING) 사용
 """
 
 GLOSSARY = {
@@ -16,8 +22,8 @@ GLOSSARY = {
         'alternative_terms': ['크레딧', '사용량', '구매', 'usage'],
         'description': '크레딧: Write/Research 서비스에서 사용자가 소비하는 단위. 사용(usage)은 agent_credit_usage_log에서 delta_amount < 0으로 추적.',
         'primary_source': [
-            '사용량: cdc_service_db_new_liner.agent_credit_usage_log (delta_amount < 0)',
-            '제품 필터: EVENTS_296805에서 make_chat + liner_product로 제품별 사용자 정의'
+            '사용량: cdc_service_db_new_liner.agent_credit_usage_log (delta_amount < 0, user_id는 INTEGER)',
+            '제품 필터: EVENTS_296805에서 make_chat + liner_product로 제품별 사용자 정의 (user_id는 STRING → 타입 캐스팅 필수)'
         ],
         'secondary_source': 'agent_credit_item (상세 항목 정보, 필요시)',
         'time_range': '⚠️ 기간 제한 불가: credit은 누적 지표이므로 기간 없음 권장. 시계열이 필요하면 명시.',
@@ -25,14 +31,16 @@ GLOSSARY = {
             "LIKE '%credit%' in JSON_EXTRACT(event_properties, '$.query')",
             "event_type = 'complete_use_credit' 사용 (EVENTS의 크레딧 이벤트는 신뢰X)",
             "agent_credit_usage_log만 사용해서 제품 정보 손실 (EVENTS 조인 필요)",
-            "자동으로 DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) 필터 추가 (누적 지표는 전체 기간)"
+            "자동으로 DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) 필터 추가 (누적 지표는 전체 기간)",
+            "EVENTS_296805.user_id (STRING)과 agent_credit_usage_log.user_id (INTEGER) JOIN 시 타입 캐스팅 없음"
         ],
         'routing_rule': """
         credit 질문 →
           1. "Write/Scholar 사용자의 credit 사용" →
-             Step 1: EVENTS_296805 + (event_type='make_chat' + liner_product) 정의
-             Step 2: cdc_service_db_new_liner.agent_credit_usage_log JOIN (delta_amount < 0)
-             Step 3: SUM(-delta_amount) 집계
+             Step 1: EVENTS_296805 + (event_type='make_chat' + liner_product) 정의 (user_id는 STRING)
+             Step 2: cdc_service_db_new_liner.agent_credit_usage_log JOIN
+                     조건: CAST(events.user_id AS INT64) = credit.user_id (타입 일치 필수!)
+             Step 3: SUM(ABS(delta_amount)) 집계 (delta_amount < 0 필터)
           2. "사용량 TOP" → GROUP BY user_id + ORDER BY DESC + LIMIT 1
           3. "기간 제한" → date_trunc(created_at, 'Asia/Seoul') 사용
           4. ⚠️ 기간이 없으면 전체 데이터 사용 (30일 자동 추가 금지!)
@@ -98,18 +106,20 @@ GLOSSARY = {
 
     'pro/max 구독자': {
         'alternative_terms': ['프로 유저', '맥스 유저', '유료 구독', '프로/맥스', 'pro user', 'max user', 'pro', 'max'],
-        'description': 'Pro/Max 유료 구독자. product_category가 \'pro\' 또는 \'max\'인 사용자.',
-        'primary_source': 'like.fct_moon_subscription: product_category IN (\'pro\', \'max\')',
+        'description': 'Pro/Max 유료 구독자. product_category가 \'pro\' 또는 \'max\'인 사용자. fct_moon_subscription.user_id는 INTEGER!',
+        'primary_source': 'like.fct_moon_subscription: product_category IN (\'pro\', \'max\'), user_id는 INTEGER',
         'anti_patterns': [
             'liner_product에서 pro/max 찾기 (틀림, liner_product는 제품명)',
             'plan_id에 \'pro\'/\'max\' 직접 필터링 (실제 plan_id는 Stripe ID)',
-            'status만 사용하고 product_category 조건 누락'
+            'status만 사용하고 product_category 조건 누락',
+            'EVENTS_296805 (STRING user_id)와 fct_moon_subscription (INTEGER user_id) 조인 시 CAST 누락'
         ],
         'routing_rule': """
         pro/max 구독자 질문 →
           WHERE product_category IN ('pro', 'max')
           + 필요시 구독 기간 조건 (subscription_start_at, subscription_ended_at)
           + 필요시 파트너 제외: is_from_partnership = FALSE
+          ⚠️ EVENTS와 조인: CAST(events.user_id AS INT64) = sub.user_id (타입 일치!)
         """,
         'forbidden_in_columns': [
             {
