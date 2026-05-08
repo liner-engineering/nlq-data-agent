@@ -13,8 +13,10 @@ from src.executor.data_processor import DataProcessor
 from src.exceptions import NLQAgentException, SQLGenerationError
 from src.logging_config import ContextualLogger, PerformanceLogger, setup_logging
 from src.query.context_builder import ContextBuilder
+from src.query.explanation_generator import ExplanationFormatter, ExplanationGenerator
 from src.query.generator import SQLGenerator
 from src.query.intent_classifier import IntentClassifier, QueryIntent
+from src.query.sql_analyzer import SQLAnalyzer
 from src.query.validator import SQLValidator
 from src.types import AnalysisResult, SQL
 
@@ -69,6 +71,10 @@ class NLQAgent:
         self.generator = SQLGenerator(self.config.llm)
         self.bq_executor = BigQueryExecutor(self.config.bigquery)
         self.data_processor = DataProcessor(self.config.analysis)
+        self.sql_analyzer = SQLAnalyzer()
+        self.explanation_gen = ExplanationGenerator(
+            self.generator.client, self.config.llm.model
+        )
 
     def _estimate_cost(self, bytes_billed: int) -> tuple[str, str]:
         """
@@ -208,6 +214,21 @@ class NLQAgent:
             sql = sql_result.data
             logger.info(f"SQL 생성 완료: {len(sql)} chars")
 
+            # 1.5 SQL 설명 생성 (LLM + 템플릿)
+            logger.info("SQL 설명 생성 중")
+            sql_explanation = ""
+            try:
+                with perf.timer("generate_sql_explanation"):
+                    structure = self.sql_analyzer.analyze(sql)
+                    explanation_dict = self.explanation_gen.generate(
+                        user_query, sql, structure
+                    )
+                    sql_explanation = ExplanationFormatter.format(explanation_dict)
+                    logger.info("SQL 설명 생성 완료")
+            except Exception as e:
+                logger.warning(f"SQL 설명 생성 실패: {e}")
+                sql_explanation = ""
+
             # 2. 비용 정보 조회 (이미 검증했지만 정보만 다시 수집)
             logger.info("Step 2: 최종 비용 확인")
             with perf.timer("cost_estimation"):
@@ -271,6 +292,7 @@ class NLQAgent:
                 cost_estimate=cost_estimate,
                 cost_status=cost_status,
                 cost_message=cost_message,
+                sql_explanation=sql_explanation,
             )
 
         except NLQAgentException as e:

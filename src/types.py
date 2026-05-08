@@ -165,6 +165,7 @@ class AnalysisResult:
         cost_estimate: 비용 추정 정보 (bytes_processed, bytes_billed)
         cost_status: 비용 상태 ("ok", "warning", "alert", "blocked")
         cost_message: 사용자에게 보여줄 비용 메시지
+        sql_explanation: SQL 설명 (마크다운 형식)
     """
 
     def __init__(
@@ -181,6 +182,7 @@ class AnalysisResult:
         cost_estimate: dict[str, int] | None = None,
         cost_status: str = "ok",
         cost_message: str = "",
+        sql_explanation: str = "",
     ):
         self.query = query
         self.sql = sql
@@ -194,6 +196,7 @@ class AnalysisResult:
         self.cost_estimate = cost_estimate or {}
         self.cost_status = cost_status
         self.cost_message = cost_message
+        self.sql_explanation = sql_explanation
 
     def to_dict(self) -> dict[str, Any]:
         """사전으로 변환"""
@@ -210,6 +213,7 @@ class AnalysisResult:
             "cost_estimate": self.cost_estimate,
             "cost_status": self.cost_status,
             "cost_message": self.cost_message,
+            "sql_explanation": self.sql_explanation,
         }
 
     def to_json_serializable(self) -> dict[str, Any]:
@@ -228,6 +232,7 @@ class AnalysisResult:
             "cost_estimate": self.cost_estimate,
             "cost_status": self.cost_status,
             "cost_message": self.cost_message,
+            "sql_explanation": self.sql_explanation,
         }
 
 
