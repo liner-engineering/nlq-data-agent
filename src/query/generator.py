@@ -457,15 +457,16 @@ class SQLGenerator:
         error: str,
     ) -> str:
         """
-        검증 실패 시 LLM에게 줄 피드백.
+        재시도 시 LLM에게 이전 실패를 전달하는 피드백.
 
-        Glossary 위반이 있으면 정답(primary_source)까지 함께 전달하여
-        LLM이 같은 실수를 반복하지 않도록 합니다.
+        생성 실패, 검증 실패, 비용 검증 실패 등 이전 시도의 문제를
+        전달하며, Glossary 위반이 있으면 정답(primary_source)까지 함께
+        제공하여 LLM이 같은 실수를 반복하지 않도록 합니다.
 
         Args:
             user_query: 사용자의 원본 쿼리
-            failed_sql: 검증에 실패한 SQL (있으면)
-            error: 검증 에러 메시지
+            failed_sql: 이전 시도에서 생성된 SQL (있으면)
+            error: 이전 시도의 실패 사유 또는 에러 메시지
 
         Returns:
             LLM에게 전달할 피드백 텍스트
