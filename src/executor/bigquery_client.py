@@ -5,6 +5,7 @@ SQL을 BigQuery에서 실행하고 결과를 DataFrame으로 반환합니다.
 싱글톤 패턴과 재시도 로직을 포함합니다.
 """
 
+import re
 import time
 from typing import Any
 
@@ -123,7 +124,36 @@ class BigQueryExecutor:
                 return Result.success(df)
 
         except GoogleCloudError as e:
-            error_msg = f"BigQuery 오류: {str(e)}"
+            error_str = str(e)
+
+            # 비용 한도 초과 — 사용자 친화적 메시지
+            if "bytesBilledLimitExceeded" in error_str:
+                # 필요 바이트 추출
+                required_match = re.search(r'(\d+)\s+or higher required', error_str)
+                if required_match:
+                    required_bytes = int(required_match.group(1))
+                    required_gb = required_bytes / (1024**3)
+                    required_tb = required_bytes / (1024**4)
+
+                    friendly_msg = (
+                        f"⚠️ 쿼리가 너무 많은 데이터({required_tb:.2f}TB / {required_gb:.0f}GB)를 스캔하려고 합니다.\n\n"
+                        f"비용 보호를 위해 1TB로 제한되어 있습니다. "
+                        f"다음 중 하나를 시도해주세요:\n\n"
+                        f"1. **시간 범위 좁히기**: '지난 30일' → '지난 7일'\n"
+                        f"2. **이벤트 필터 추가**: event_type='make_chat' 등 구체화\n"
+                        f"3. **사용자 그룹 한정**: 특정 plan_id, sector 등으로 필터\n\n"
+                        f"예: 지금 쿼리에 시간 필터가 없거나 너무 광범위할 수 있습니다."
+                    )
+                    logger.warning(f"비용 초과 감지: {required_tb:.2f}TB")
+                    return Result.failure(friendly_msg)
+
+                return Result.failure(
+                    "⚠️ 쿼리가 비용 한도(1TB)를 초과합니다. "
+                    "시간 범위나 필터를 좁혀주세요."
+                )
+
+            # 다른 BigQuery 에러
+            error_msg = f"BigQuery 오류: {error_str[:200]}"
             logger.error(error_msg)
             return Result.failure(error_msg)
 

@@ -500,6 +500,18 @@ class SQLGenerator:
         # 검증 에러
         parts.extend([f"문제: {error}", ""])
 
+        # 비용 초과 에러 — 구체적 가이드
+        if "bytes billed" in error.lower() or "1TB" in error or "데이터" in error.lower():
+            parts.extend([
+                "**비용 한도 초과 해결 방법 (우선순위 순):**",
+                "1. 시간 범위를 더 좁히세요: 30일 → 7일",
+                "2. event_type을 명시하세요: WHERE event_type = 'make_chat' AND ...",
+                "3. 파티션 컬럼 활용: WHERE DATE(event_time) >= DATE(...) 형식 필수",
+                "4. 불필요한 JOIN 제거",
+                "5. WHERE에서 가능한 한 일찍 필터링 (HAVING보다 WHERE 우선)",
+                "",
+            ])
+
         # Glossary 정보 (있으면)
         if relevant_glossary:
             parts.append("**아래 도메인 용어 매핑을 정확히 따르세요:**")
