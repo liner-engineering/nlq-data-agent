@@ -378,9 +378,16 @@ def main():
                             if proc_result.is_success():
                                 proc_data = proc_result.data
                                 from src.types import AnalysisResult
+
+                                # 상태 저장 (display_results 호출 전에 session_state에서 삭제)
+                                saved_sql = st.session_state.pending_sql
+                                saved_query = st.session_state.pending_query
+                                del st.session_state.pending_sql
+                                del st.session_state.pending_query
+
                                 analysis_result = AnalysisResult(
-                                    query=st.session_state.pending_query,
-                                    sql=st.session_state.pending_sql,
+                                    query=saved_query,
+                                    sql=saved_sql,
                                     data=proc_data["df_cleaned"],
                                     stats=proc_data["stats"],
                                     explanation=proc_data["explanation"],
@@ -393,9 +400,7 @@ def main():
                                 )
                                 display_results(analysis_result)
 
-                                # 완료 후 상태 초기화 (rerun 없음 - 결과 화면 유지)
-                                del st.session_state.pending_sql
-                                del st.session_state.pending_query
+                                # 완료 후 나머지 상태 초기화
                                 if "cost_estimate" in st.session_state:
                                     del st.session_state.cost_estimate
                                 if "cost_status" in st.session_state:
