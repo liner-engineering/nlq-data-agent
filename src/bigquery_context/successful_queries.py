@@ -87,7 +87,7 @@ ORDER BY total_credit_used DESC
     },
 
     'write_user_credit_usage': {
-        'description': 'Write 서비스 사용자의 credit 사용량 (최적화된 버전)',
+        'description': 'Write 서비스 사용자의 credit 사용량 (기본 버전)',
         'use_case': 'Write 유저 중 credit을 가장 많이 사용한 사람 TOP 10',
         'comment': """
 -- 의사결정 경로:
@@ -119,6 +119,46 @@ GROUP BY acul.user_id
 HAVING total_credit_used > 0
 ORDER BY total_credit_used DESC
 LIMIT 10
+        """
+    },
+
+    'write_scholar_subscription_credit_optimized': {
+        'description': 'Write 서비스 Pro/Max 유료 구독자의 credit 사용량 (초고속 최적화)',
+        'use_case': '라이너 write 서비스의 pro/max 유료 구독자 중 credit을 가장 많이 사용한 사용자 리스트',
+        'critical_note': '30배 비용 절감 패턴: 좁은 세트 먼저 구성 → 큰 테이블과 JOIN (파티션 + 시간 필터 필수)',
+        'sql': """
+-- 패턴: 좁은 세트(write_users) 먼저 만들고 → agent_credit_usage_log와 JOIN
+WITH write_users AS (
+  SELECT DISTINCT SAFE_CAST(user_id AS INT64) AS user_id
+  FROM `liner-219011.analysis.EVENTS_296805`
+  WHERE JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') = 'write'
+    AND DATE(event_time) BETWEEN '2026-04-01' AND '2026-04-30'
+),
+april_subscribers AS (
+  SELECT DISTINCT
+    SAFE_CAST(user_id AS INT64) AS user_id,
+    product_category
+  FROM `liner-219011.like.fct_moon_subscription`
+  WHERE product_category IN ('pro', 'max')
+    AND DATE(subscription_start_at) <= '2026-04-30'
+    AND (subscription_ended_at IS NULL OR DATE(subscription_ended_at) >= '2026-04-01')
+),
+target_users AS (
+  SELECT s.user_id, s.product_category
+  FROM april_subscribers s
+  INNER JOIN write_users w ON s.user_id = w.user_id
+)
+SELECT
+  t.product_category AS subscription_plan,
+  t.user_id,
+  COALESCE(SUM(ABS(acu.delta_amount)), 0) AS total_credit_used
+FROM target_users t
+LEFT JOIN `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acu
+  ON acu.user_id = t.user_id
+  AND DATE(acu.created_at) BETWEEN '2026-04-01' AND '2026-04-30'
+  AND acu.delta_amount < 0
+GROUP BY t.product_category, t.user_id
+ORDER BY t.product_category, total_credit_used DESC
         """
     }
 }

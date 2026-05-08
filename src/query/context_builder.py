@@ -355,6 +355,132 @@ LIMIT 10
 - WHERE에서 조기 필터링 (HAVING이 아니라 WHERE)
 - HAVING으로 0 값 제거
 
+## ⚠️ SQL 최적화 규칙 (비용 절감 필수 - 3TB→100GB 가능)
+
+**BigQuery 비용은 스캔 바이트에 비례합니다. 다음 규칙을 지키면 30배 비용 절감 가능합니다!**
+
+### 규칙 1: EVENTS_296805 파티션 필터 (필수!)
+
+EVENTS_296805는 **event_time 기준 파티셔닝**되어 있습니다. 반드시 WHERE에 시간 범위를 지정하세요!
+
+```sql
+-- ❌ 금지: 파티션 필터 없음 (500M 행 전체 스캔)
+SELECT ... FROM EVENTS_296805 WHERE event_type = 'make_chat'
+
+-- ✓ 권장: 파티션 필터 추가 (스캔 범위 100배 축소)
+SELECT ... FROM EVENTS_296805
+WHERE DATE(event_time) BETWEEN '2026-04-01' AND '2026-04-30'
+  AND event_type = 'make_chat'
+```
+
+**예시**:
+- "4월 DAU" → `WHERE DATE(event_time) BETWEEN '2026-04-01' AND '2026-04-30'`
+- "지난 30일" → `WHERE DATE(event_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)`
+
+### 규칙 2: agent_credit_usage_log 조기 필터링 (필수!)
+
+agent_credit_usage_log는 **매우 큰 CDC 테이블**(100M+ 행)입니다. 반드시 user_id + 시간 범위로 필터링하세요!
+
+```sql
+-- ❌ 금지: 사용자 필터 없음 (100M 행 전체 스캔)
+SELECT SUM(ABS(delta_amount))
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acu
+WHERE delta_amount < 0
+
+-- ✓ 권장: user_id + 시간 범위 필터 (스캔 100배 축소)
+SELECT SUM(ABS(delta_amount))
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acu
+WHERE acu.user_id IN (SELECT DISTINCT user_id FROM target_users)  -- ← 좁은 범위
+  AND DATE(acu.created_at) BETWEEN '2026-04-01' AND '2026-04-30'
+  AND acu.delta_amount < 0
+```
+
+### 규칙 3: 같은 테이블 중복 읽기 금지
+
+**여러 CTE에서 같은 테이블을 반복 스캔하면 비용이 폭발합니다!**
+
+```sql
+-- ❌ 나쁜 예: EVENTS_296805를 여러 번 스캔 (UNION으로 2번 읽음)
+WITH scholar_users AS (
+  SELECT user_id FROM EVENTS_296805 WHERE liner_product = 'researcher'  -- 스캔 1
+),
+write_users AS (
+  SELECT user_id FROM EVENTS_296805 WHERE liner_product = 'write'  -- 스캔 2 (중복!)
+)
+SELECT ... FROM agent_credit_usage_log
+WHERE user_id IN (SELECT user_id FROM scholar_users UNION SELECT user_id FROM write_users)
+
+-- ✓ 좋은 예: IN 절로 통합 (1번만 스캔)
+WITH target_users AS (
+  SELECT DISTINCT SAFE_CAST(user_id AS INT64) AS user_id
+  FROM EVENTS_296805
+  WHERE DATE(event_time) BETWEEN '2026-04-01' AND '2026-04-30'
+    AND liner_product IN ('researcher', 'write')
+)
+SELECT ... FROM agent_credit_usage_log acu
+WHERE acu.user_id IN (SELECT user_id FROM target_users)
+```
+
+### 규칙 4: 좁은 세트 먼저 구성, 큰 테이블은 나중에
+
+**큰 테이블(EVENTS_296805, agent_credit_usage_log)을 먼저 필터링해서 행 수를 줄인 후 JOIN하세요!**
+
+```sql
+-- ❌ 나쁜 예: 큰 테이블 먼저 전체 로드
+SELECT ...
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acu  -- 100M 행
+INNER JOIN `liner-219011.analysis.EVENTS_296805` e
+  ON CAST(e.user_id AS INT64) = acu.user_id
+WHERE e.liner_product = 'write'  -- 필터가 늦음!
+  AND DATE(e.event_time) BETWEEN '2026-04-01' AND '2026-04-30'
+
+-- ✓ 좋은 예: 좁은 세트 먼저, 큰 테이블은 나중에
+WITH write_users AS (
+  SELECT DISTINCT SAFE_CAST(user_id AS INT64) AS user_id
+  FROM `liner-219011.analysis.EVENTS_296805`
+  WHERE DATE(event_time) BETWEEN '2026-04-01' AND '2026-04-30'
+    AND liner_product = 'write'  -- 조기 필터 (1000명으로 축소)
+)
+SELECT ...
+FROM `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acu
+INNER JOIN write_users w ON acu.user_id = w.user_id  -- 1000명만 조인
+WHERE DATE(acu.created_at) BETWEEN '2026-04-01' AND '2026-04-30'
+  AND acu.delta_amount < 0
+```
+
+### 규칙 5: CTE 설계 패턴 (조기 필터링 원칙)
+
+**WHERE절에서 최대한 조기 필터링하고, SELECT에서는 필요한 컬럼만 선택하세요!**
+
+```sql
+-- ✓ 최적화된 CTE 구조
+WITH base AS (
+  SELECT
+    SAFE_CAST(user_id AS INT64) AS user_id,  -- ← 필요한 컬럼만
+    JSON_EXTRACT_SCALAR(event_properties, '$.liner_product') AS liner_product
+  FROM `liner-219011.analysis.EVENTS_296805`
+  WHERE DATE(event_time) BETWEEN '2026-04-01' AND '2026-04-30'  -- ← 파티션 필터 먼저
+    AND event_type = 'make_chat'  -- ← 조기 필터
+),
+target_users AS (
+  SELECT DISTINCT user_id
+  FROM base
+  WHERE liner_product = 'write'  -- ← 필터 순서: 시간 → 이벤트 타입 → 제품 필터
+)
+SELECT
+  t.user_id,
+  SUM(-acu.delta_amount) AS total_credit_used
+FROM target_users t
+INNER JOIN `liner-219011.cdc_service_db_new_liner.agent_credit_usage_log` acu
+  ON acu.user_id = t.user_id
+  AND DATE(acu.created_at) BETWEEN '2026-04-01' AND '2026-04-30'  -- ← 조인 조건에도 시간 필터
+  AND acu.delta_amount < 0
+GROUP BY t.user_id
+HAVING SUM(-acu.delta_amount) > 0  -- ← 0값 제거는 HAVING
+ORDER BY total_credit_used DESC
+LIMIT 10
+```
+
 ## ⚠️ 비즈니스 도메인 규칙
 
 ### Business Model (매출 분류) — 8가지, Mutually Exclusive
