@@ -138,4 +138,50 @@ EVAL_CASES = [
         must_contain=["CASE WHEN"],
         category="churn",
     ),
+
+    # === 카테고리 7: Glossary 준수 (도메인 용어 → 올바른 SQL 매핑) ===
+    EvalCase(
+        question="라이너 스칼라를 사용한 사람들 중에서 pro/max 유저의 크레딧 사용량",
+        expected_tables=["EVENTS_296805", "fct_moon_subscription", "agent_credit_usage_log"],
+        must_contain=[
+            "researcher",  # Scholar = researcher (스칼라 필터)
+            "plan_id",     # pro/max는 plan_id에서 찾아야 함
+            "agent_credit_usage_log",  # 크레딧 데이터
+            "delta_amount",  # 크레딧 사용량
+        ],
+        must_not_contain=[
+            "liner_product') IN ('pro'",  # pro/max는 liner_product가 아님
+            "liner_product') = 'pro'",
+            "liner_product') = 'scholar'",  # scholar는 사용자 표현, 내부값은 researcher
+        ],
+        category="glossary_compliance",
+    ),
+    EvalCase(
+        question="Pro 구독자의 월별 활동 추이",
+        expected_tables=["fct_moon_subscription", "EVENTS_296805"],
+        must_contain=["plan_id", "'pro'"],
+        must_not_contain=["liner_product') = 'pro'"],
+        category="glossary_compliance",
+    ),
+    EvalCase(
+        question="Write 서비스 사용자들의 월별 DAU",
+        expected_tables=["EVENTS_296805"],
+        must_contain=["liner_product", "'write'", "COUNT(DISTINCT", "GROUP BY"],
+        must_not_contain=["'Write'"],  # 올바른 값은 'write' (소문자)
+        category="glossary_compliance",
+    ),
+    EvalCase(
+        question="Scholar 사용자 중 활성 구독자의 credit 사용량",
+        expected_tables=["EVENTS_296805", "fct_moon_subscription", "agent_credit_usage_log"],
+        must_contain=["researcher", "status = 'active'", "delta_amount"],
+        must_not_contain=["liner_product') = 'scholar'"],
+        category="glossary_compliance",
+    ),
+    EvalCase(
+        question="Max 유료 구독자의 평균 활동 강도",
+        expected_tables=["fct_moon_subscription", "EVENTS_296805"],
+        must_contain=["plan_id", "'max'", "make_chat"],
+        must_not_contain=["liner_product'),  IN ('max'"],
+        category="glossary_compliance",
+    ),
 ]

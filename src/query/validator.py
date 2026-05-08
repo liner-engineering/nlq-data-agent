@@ -117,6 +117,10 @@ class SQLValidator:
             glossary_errors = self._lint_glossary_violations(sql, user_query)
             errors.extend(glossary_errors)
 
+            # 9.5 컬럼-값 매핑 검증 (forbidden_in_columns)
+            value_col_errors = self._validate_value_column_mapping(sql, user_query)
+            errors.extend(value_col_errors)
+
         # 10. SQL 의미성 검증 (무의미한 쿼리 패턴)
         meaningfulness_errors = self._validate_meaningfulness(sql)
         errors.extend(meaningfulness_errors)
@@ -428,5 +432,82 @@ class SQLValidator:
                         "분석 의도가 불명확합니다. "
                         "GROUP BY, 정렬, 또는 집계 함수를 추가하세요."
                     )
+
+        return errors
+
+    def _validate_value_column_mapping(self, sql: str, user_query: str) -> list[str]:
+        """
+        Glossary의 forbidden_in_columns 기반 검증.
+
+        어떤 컬럼에 어떤 값이 와선 안 되는지를 검증합니다.
+        예: pro/max는 plan_id에서만 유효하고, liner_product에 와선 안 됨.
+
+        Args:
+            sql: 검증할 SQL
+            user_query: 사용자 쿼리
+
+        Returns:
+            위반 항목 (에러)
+        """
+        errors: list[str] = []
+        user_query_lower = user_query.lower()
+
+        for term, info in GLOSSARY.items():
+            # 용어가 질문에 포함되어 있는가?
+            term_found = False
+
+            # 주 용어
+            if term in user_query_lower:
+                term_found = True
+
+            # 동의어
+            if not term_found and 'alternative_terms' in info:
+                for alt in info.get('alternative_terms', []):
+                    if alt.lower() in user_query_lower:
+                        term_found = True
+                        break
+
+            if not term_found:
+                continue
+
+            # 금지된 컬럼-값 매핑 확인
+            forbidden_list = info.get('forbidden_in_columns', [])
+            if not forbidden_list:
+                continue
+
+            for forbidden in forbidden_list:
+                wrong_col = forbidden.get('wrong_column', '')
+                wrong_vals = forbidden.get('wrong_values', [])
+                reason = forbidden.get('reason', '')
+
+                if not wrong_col or not wrong_vals:
+                    continue
+
+                # 각 잘못된 값에 대해 패턴 검사
+                for val in wrong_vals:
+                    # 패턴들을 정의 (LIKE, =, IN, JSON_EXTRACT_SCALAR 형태 모두 포함)
+                    patterns = [
+                        # 패턴 1: column = 'val'
+                        rf"\b{re.escape(wrong_col)}\s*=\s*['\"]?{re.escape(val)}['\"]?",
+                        # 패턴 2: column IN (...'val'...)
+                        rf"\b{re.escape(wrong_col)}\s*IN\s*\([^)]*['\"]?{re.escape(val)}['\"]?[^)]*\)",
+                        # 패턴 3: column LIKE '%val%'
+                        rf"\b{re.escape(wrong_col)}\s*LIKE\s*['\"]%?{re.escape(val)}%?['\"]",
+                        # 패턴 4: JSON_EXTRACT_SCALAR(..., '$.column') = 'val'
+                        rf"JSON_EXTRACT_SCALAR\s*\([^,]+,\s*['\"]?\$\.{re.escape(wrong_col)}['\"]?\s*\)\s*=\s*['\"]?{re.escape(val)}['\"]?",
+                        # 패턴 5: JSON_EXTRACT_SCALAR(..., '$.column') IN (...)
+                        rf"JSON_EXTRACT_SCALAR\s*\([^,]+,\s*['\"]?\$\.{re.escape(wrong_col)}['\"]?\s*\)\s*IN\s*\([^)]*['\"]?{re.escape(val)}['\"]?[^)]*\)",
+                    ]
+
+                    for pattern in patterns:
+                        if re.search(pattern, sql, re.IGNORECASE):
+                            error_msg = (
+                                f"[Glossary Violation] '{term}' 질문이지만 "
+                                f"'{wrong_col}' 컬럼에서 '{val}'을(를) 찾고 있습니다. "
+                                f"이유: {reason}. "
+                                f"올바른 위치: {info.get('primary_source', 'schema 확인')}"
+                            )
+                            errors.append(error_msg)
+                            break  # 한 패턴 매칭되면 다음 값으로
 
         return errors

@@ -96,6 +96,30 @@ GLOSSARY = {
         """
     },
 
+    'pro/max 구독자': {
+        'alternative_terms': ['프로 유저', '맥스 유저', '유료 구독', '프로/맥스', 'pro user', 'max user', 'pro', 'max'],
+        'description': 'Pro/Max 유료 구독자. plan_id가 \'pro\' 또는 \'max\'인 사용자.',
+        'primary_source': 'like.fct_moon_subscription: plan_id IN (\'pro\', \'max\')',
+        'anti_patterns': [
+            'liner_product에서 pro/max 찾기 (틀림, liner_product는 제품명)',
+            'plan_id에 \'pro\'/\'max\' 대신 다른 필드 사용',
+            'status만 사용하고 plan_id 조건 누락'
+        ],
+        'routing_rule': """
+        pro/max 구독자 질문 →
+          WHERE plan_id IN ('pro', 'max')
+          + 필요시 구독 기간 조건 (subscription_start_at, subscription_ended_at)
+        """,
+        'forbidden_in_columns': [
+            {
+                'wrong_column': 'liner_product',
+                'wrong_values': ['pro', 'max', 'Pro', 'Max'],
+                'reason': 'pro/max는 구독 플랜 정보이지, 제품(liner_product)이 아님',
+                'correct': 'fct_moon_subscription.plan_id IN (\'pro\', \'max\')'
+            }
+        ]
+    },
+
     'scholar': {
         'alternative_terms': ['Scholar', '스칼라', 'researcher', 'research'],
         'description': 'Scholar = 논문 검색/요약 서비스. liner_product = \'researcher\' (주의: 필드명과 다름)',
@@ -103,7 +127,15 @@ GLOSSARY = {
         'anti_patterns': [
             'liner_product = \'scholar\' (틀림, \'researcher\' 사용)',
         ],
-        'routing_rule': 'scholar 질문 → liner_product = \'researcher\' 필터'
+        'routing_rule': 'scholar 질문 → liner_product = \'researcher\' 필터',
+        'forbidden_in_columns': [
+            {
+                'wrong_column': 'liner_product',
+                'wrong_values': ['scholar', 'Scholar', 'SCHOLAR'],
+                'reason': 'Scholar의 내부 값은 \'researcher\'이지, \'scholar\'가 아님',
+                'correct': 'liner_product = \'researcher\''
+            }
+        ]
     },
 
     'ai_search': {
