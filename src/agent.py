@@ -248,6 +248,27 @@ class NLQAgent:
             df = exec_result.data
             logger.info(f"쿼리 완료: {len(df)} rows")
 
+            # 3.5 0행 결과 의심 로직
+            if len(df) == 0:
+                logger.warning("0행 결과 감지 — 가능한 원인 분석 중")
+                suspicions = self._check_zero_rows_suspicion(sql, user_query)
+                suspicion_msg = self._format_suspicions(suspicions)
+
+                return AnalysisResult(
+                    query=user_query,
+                    sql=sql,
+                    data=None,
+                    stats={},
+                    explanation=f"데이터가 없습니다.\n\n{suspicion_msg}",
+                    success=False,
+                    data_quality={},
+                    sample_warning="데이터 없음",
+                    cost_estimate={},
+                    cost_status="",
+                    cost_message="",
+                    sql_explanation=sql_explanation,
+                )
+
             # 4. 데이터 처리
             logger.info("Step 4: 데이터 처리 중")
             with perf.timer("process_data"):
@@ -305,6 +326,104 @@ class NLQAgent:
                 data_quality={},
                 sample_warning="",
             )
+
+    def _check_zero_rows_suspicion(self, sql: str, user_query: str) -> list[str]:
+        """
+        0행 결과의 가능한 원인 분석
+
+        Returns:
+            의심 원인 리스트
+        """
+        import re
+        from datetime import datetime
+
+        suspicions = []
+
+        # 1. 과거 연도 검사
+        years_in_sql = re.findall(r"'(\d{4})-", sql)
+        current_year = datetime.now().year
+        for year in years_in_sql:
+            year_int = int(year)
+            if year_int < current_year - 1:
+                suspicions.append(
+                    f"SQL에 {year}년이 사용되었습니다. "
+                    f"사용자 의도가 올해({current_year})였을 가능성 높음"
+                )
+
+        # 2. 타입 캐스팅 의심 (JOIN에서)
+        if "CAST" in sql.upper() and "INT64" in sql.upper() and "JOIN" in sql.upper():
+            suspicions.append(
+                "JOIN 컬럼에 타입 캐스팅이 있습니다. "
+                "EVENTS_296805.user_id(STRING) vs fct_moon_subscription.user_id(INT64) "
+                "타입 불일치로 0건 반환될 수 있습니다"
+            )
+
+        # 3. CASE 문으로 구분하려는 데 필요 컬럼 없음
+        if "CASE" in sql.upper() and "WHEN" in sql.upper():
+            # GROUP BY에서 CASE 사용하는데, CTE에서 필요 컬럼 없음
+            if "GROUP BY" in sql.upper():
+                suspicions.append(
+                    "CASE 문으로 그룹 구분하려고 하는데, "
+                    "필요한 컬럼(예: plan_id, product_category)이 CTE SELECT에 없을 수 있습니다"
+                )
+
+        # 4. 시간 범위 부정확 (BETWEEN이 범위를 넘어감)
+        if "DATE_TRUNC" in sql.upper() and "BETWEEN" in sql.upper():
+            suspicions.append(
+                "DATE_TRUNC가 있는 시간 범위는 의도와 다를 수 있습니다. "
+                "명시적 날짜(예: '2026-04-01' AND '2026-04-30')를 확인하세요"
+            )
+
+        # 5. 활성 구독자 필터가 분석 기간과 불일치
+        if "subscription_start_at" in sql.lower() and "subscription_ended_at" in sql.lower():
+            if "CURRENT_DATE()" in sql:
+                suspicions.append(
+                    "활성 구독자(현재 기준)로만 필터링하면, "
+                    "과거 기간의 구독 데이터를 놓칠 수 있습니다. "
+                    "분석 기간에 활성이었던 사용자를 써야 합니다"
+                )
+
+        # 6. 사용자 쿼리에서 "4월"인데 SQL에 2024년
+        if ("4월" in user_query or "april" in user_query.lower()) and "2024" in sql:
+            suspicions.append(
+                "사용자 질문: '4월', SQL: 2024년 4월. "
+                "현재는 2026년이므로 2026년 4월 데이터를 확인하세요"
+            )
+
+        if not suspicions:
+            suspicions.append(
+                "특정 원인을 찾지 못했습니다. "
+                "다음을 확인하세요:\n"
+                "1. 시간 범위가 맞는가\n"
+                "2. 필터 조건이 너무 까다로운가\n"
+                "3. 테이블이 실제로 존재하는가"
+            )
+
+        return suspicions
+
+    def _format_suspicions(self, suspicions: list[str]) -> str:
+        """
+        의심 사항을 포맷팅하여 사용자에게 친화적인 메시지 생성
+
+        Args:
+            suspicions: 의심 원인 리스트
+
+        Returns:
+            포맷팅된 메시지
+        """
+        if not suspicions:
+            return "원인을 특정하지 못했습니다. SQL을 다시 확인해주세요."
+
+        lines = ["다음을 의심해보세요:\n"]
+        for i, susp in enumerate(suspicions, 1):
+            lines.append(f"{i}. {susp}")
+
+        lines.append(
+            "\n혹은 SQL을 다시 작성해달라고 요청하세요. "
+            "정정된 SQL을 제공할 수 있습니다."
+        )
+
+        return "\n".join(lines)
 
     def _answer_meta_question(self) -> str:
         """시스템에 대한 메타 질문에 답하기"""

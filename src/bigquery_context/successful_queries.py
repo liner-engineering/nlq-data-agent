@@ -66,7 +66,7 @@ WITH scholar_users AS (
 pro_max_users AS (
   SELECT DISTINCT SAFE_CAST(user_id AS INT64) AS user_id
   FROM `liner-219011.like.fct_moon_subscription`
-  WHERE plan_id IN ('pro', 'max')
+  WHERE product_category IN ('pro', 'max')
     AND DATE(subscription_start_at) <= CURRENT_DATE()
     AND (subscription_ended_at IS NULL OR DATE(subscription_ended_at) >= CURRENT_DATE())
 )

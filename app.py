@@ -387,18 +387,21 @@ def main():
                                     success=True,
                                     data_quality=proc_data["data_quality"],
                                     sample_warning=proc_data["sample_warning"],
-                                    cost_estimate=cost_estimate,
-                                    cost_status=cost_status,
-                                    cost_message=cost_message,
+                                    cost_estimate={},
+                                    cost_status="",
+                                    cost_message="",
                                 )
                                 display_results(analysis_result)
 
                                 # 완료 후 상태 초기화
                                 del st.session_state.pending_sql
                                 del st.session_state.pending_query
-                                del st.session_state.cost_estimate
-                                del st.session_state.cost_status
-                                del st.session_state.cost_message
+                                if "cost_estimate" in st.session_state:
+                                    del st.session_state.cost_estimate
+                                if "cost_status" in st.session_state:
+                                    del st.session_state.cost_status
+                                if "cost_message" in st.session_state:
+                                    del st.session_state.cost_message
                                 st.rerun()  # 사이드바 LLM 비용 통계 업데이트
                             else:
                                 st.error(f"데이터 처리 실패: {proc_result.error}")
